@@ -94,7 +94,7 @@ def ingest_raw(path: str, raw_dir: str) -> dict[str, int]:
     import os
     out = {}
     for t in ("weather_daily", "fin_quarterly", "fin_cumulative_raw", "prices", "market", "disclosures",
-              "citygas_volume", "cpi_citygas"):
+              "citygas_volume", "cpi_citygas", "forecast_mid"):
         f = os.path.join(raw_dir, f"{t}.csv")
         if os.path.exists(f):
             df = pd.read_csv(f, dtype={"code": str})

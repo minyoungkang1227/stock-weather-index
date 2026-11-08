@@ -58,14 +58,21 @@ def cmd_daily(asof: pd.Timestamp) -> None:
     rid, t0 = uuid.uuid4().hex[:8], datetime.now().isoformat(timespec="seconds")
     msgs = []
     try:
-        key = os.getenv("DATA_GO_KR_KEY")
-        if key:
+        hub, key = os.getenv("KMA_APIHUB_KEY"), os.getenv("DATA_GO_KR_KEY")
+        if hub:
+            from collect import kma_apihub
+            start = (asof - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+            w = kma_apihub.fetch_asos_daily(list(C.STATIONS), start, asof.strftime("%Y-%m-%d"), hub)
+            msgs.append(f"기상 관측(API허브) {db.upsert(C.DB_PATH, 'weather_daily', w)}행")
+            f = kma_apihub.fetch_mid_temperature_latest(C.FORECAST_REG, hub, C.KMA_FCST_TEMP_ENDPOINT)
+            msgs.append(f"예보(API허브) {db.upsert(C.DB_PATH, 'forecast_mid', f)}행")
+        elif key:
             w = weather.fetch_asos(list(C.STATIONS), asof.year - (1 if asof.month == 1 else 0), asof.year, key)
             msgs.append(f"기상 관측 {db.upsert(C.DB_PATH, 'weather_daily', w)}행")
             f = forecast.fetch_mid_temperature(C.FORECAST_REG, key)
             msgs.append(f"예보 {db.upsert(C.DB_PATH, 'forecast_mid', f)}행")
         else:
-            msgs.append("DATA_GO_KR_KEY 없음: 관측·예보 갱신 생략")
+            msgs.append("KMA_APIHUB_KEY·DATA_GO_KR_KEY 없음: 관측·예보 갱신 생략")
         try:
             start = (asof - pd.Timedelta(days=40)).strftime("%Y-%m-%d")
             px = prices.fetch_prices(list(C.FIRMS), start)

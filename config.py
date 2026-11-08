@@ -95,3 +95,9 @@ FORECAST_ERR_SD = 2.0            # 중기예보 일평균기온 오차 표준편
 CLIM_SMOOTH_DAYS = 15            # 일별 평년값을 앞뒤로 평균내는 창(일)
 GATE_WEATHER_STALE_DAYS = 5      # 관측이 이보다 오래되면 지수 산출 중단
 GATE_PRICE_STALE_DAYS = 7
+
+# ---------- 기상청 API허브 (KMA_APIHUB_KEY 가 있으면 공공데이터포털 대신 사용) ----------
+# 중기 기온예보 엔드포인트: API허브 '예특보 > 중기예보 > 중기예보자료(2001년 2월 이후) 조회'의 기온 항목 URL 파일명
+KMA_FCST_TEMP_ENDPOINT = "fct_afs_wc.php"   # 확인 필요: 실제 URL의 파일명과 다르면 여기만 고치세요
+FORECAST_HIST_START = "2015-01-01"          # 예보 이력 수집 시작 (분석 기간과 맞춤)
+KMA_CACHE = "data/raw/kma_cache"            # 연·월별 이어받기용 임시 저장
