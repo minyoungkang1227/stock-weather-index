@@ -57,44 +57,84 @@ def _pick(items: list[dict], names: set[str], fs_div: str) -> tuple[float, float
     return float("nan"), float("nan")
 
 
-def fetch_cumulative(code: str, corp: str, year: int, q: int, key: str) -> dict | None:
+def fetch_cumulative(code: str, corp: str, year: int, q: int, key: str) -> list[dict]:
+    """보고서 하나에서 연결(CFS)·별도(OFS) 기준을 각각 한 행씩 돌려줍니다(있는 것만).
+
+    기준 선택은 여기서 하지 않고 choose_basis 에서 종목 단위로 한 번에 합니다.
+    (예전처럼 보고서마다 '연결 있으면 연결'로 고르면, 연중에 자회사가 생긴 해에
+    1분기=별도, 2분기=연결처럼 섞여 그 해 분기 실적을 계산할 수 없었습니다.)
+    """
     params = {"crtfc_key": key, "corp_code": corp, "bsns_year": str(year), "reprt_code": REPRT[q]}
     r = requests.get(f"{BASE}/fnlttSinglAcnt.json", params=params, timeout=30)
     r.raise_for_status()
     js = r.json()
     if js.get("status") != "000":
-        return None  # 013 = 데이터 없음 등
+        return []  # 013 = 데이터 없음 등
     items = js["list"]
-    fs = "CFS" if any(i.get("fs_div") == "CFS" for i in items) else "OFS"
-    rev_cum, rev_cur = _pick(items, REVENUE_NAMES, fs)
-    op_cum, op_cur = _pick(items, OPINC_NAMES, fs)
-    return dict(code=code, year=year, q=q, fs_div=fs,
-                rev_cum=rev_cum, rev_cur=rev_cur, op_cum=op_cum, op_cur=op_cur)
+    out = []
+    for fs in ("CFS", "OFS"):
+        if not any(i.get("fs_div") == fs for i in items):
+            continue
+        rev_cum, rev_cur = _pick(items, REVENUE_NAMES, fs)
+        op_cum, op_cur = _pick(items, OPINC_NAMES, fs)
+        out.append(dict(code=code, year=year, q=q, fs_div=fs,
+                        rev_cum=rev_cum, rev_cur=rev_cur, op_cum=op_cum, op_cur=op_cur))
+    return out
 
 
-def cumulative_to_quarterly(cum: pd.DataFrame) -> pd.DataFrame:
-    """누적 금액 표(code, year, q, rev_cum, op_cum, fs_div)를 분기 단독 금액으로 바꿉니다.
+def choose_basis(cum: pd.DataFrame) -> pd.DataFrame:
+    """종목마다 연결/별도 중 하나만 전 기간에 씁니다: 매출이 있는 분기가 더 많은 쪽, 같으면 연결.
 
-    앞 분기 누적이 없으면 그 분기는 NaN으로 둡니다(추정하지 않음).
-    같은 연도 안에서 연결/별도 기준이 섞이면 차분이 의미 없으므로 NaN 처리합니다.
+    전년동기 대비로 분석하므로 해마다 기준이 바뀌면 그 자체로 가짜 변화가 생깁니다.
+    """
+    if cum.empty or cum.groupby(["code", "year", "q"])["fs_div"].nunique().max() <= 1 and \
+            cum.groupby("code")["fs_div"].nunique().max() <= 1:
+        return cum
+    cnt = cum.dropna(subset=["rev_cum"]).groupby(["code", "fs_div"]).size().unstack(fill_value=0)
+    for fs in ("CFS", "OFS"):
+        if fs not in cnt:
+            cnt[fs] = 0
+    pick = pd.Series(["CFS" if c >= o else "OFS" for c, o in zip(cnt["CFS"], cnt["OFS"])], index=cnt.index)
+    return cum[cum["fs_div"] == cum["code"].map(pick)].copy()
+
+
+def cumulative_to_quarterly(cum: pd.DataFrame, tol: float = 0.01) -> pd.DataFrame:
+    """누적 금액 표를 분기 단독 금액으로 바꿉니다.
+
+    - 1분기: 누적 = 단독.
+    - 2·3분기: 그 보고서에 회사가 직접 적은 3개월 금액(rev_cur/op_cur)이 있으면 그것을 씁니다.
+      없으면 누적 차분. (중간에 사업 분할·중단영업으로 앞 분기를 고쳐 쓴 경우, 차분은 틀리고
+      회사가 적은 3개월 금액이 맞습니다. 예: 롯데쇼핑 2017년 3분기.)
+    - 4분기: 사업보고서에는 3개월 금액이 없어 연간 - 3분기 누적. 단, 그 해에 2·3분기에서
+      '차분 ≠ 회사 기재 금액'(>tol)이 보였다면 앞 분기가 고쳐 쓰인 해이므로 4분기는 NaN(추정 안 함).
+    - 앞 분기 누적이 없으면 NaN. 같은 연도 안에서 연결/별도가 섞이면 차분하지 않음.
     """
     cum = cum.sort_values(["code", "year", "q"]).copy()
     out = []
     for (code, year), g in cum.groupby(["code", "year"]):
         g = g.set_index("q")
         mixed = g["fs_div"].nunique() > 1
+        vals, restated = {}, False
         for q in g.index:
-            row = {"code": code, "year": year, "q": q, "fs_div": g.loc[q, "fs_div"]}
             for name in ("rev", "op"):
                 c = g.loc[q, f"{name}_cum"]
+                diff = c - g.loc[q - 1, f"{name}_cum"] if (q - 1) in g.index and not mixed else float("nan")
+                cur = g.loc[q, f"{name}_cur"] if f"{name}_cur" in g else float("nan")
                 if q == 1:
                     v = c
-                elif (q - 1) in g.index and not mixed:
-                    v = c - g.loc[q - 1, f"{name}_cum"]
+                elif q in (2, 3) and pd.notna(cur):
+                    v = cur
+                    if name == "rev" and pd.notna(diff) and cur != 0 and abs(diff - cur) / abs(cur) > tol:
+                        restated = True
                 else:
-                    v = float("nan")
-                row["revenue" if name == "rev" else "op_income"] = v
-            out.append(row)
+                    v = diff
+                vals[(q, name)] = v
+        for q in g.index:
+            rev, op = vals[(q, "rev")], vals[(q, "op")]
+            if q == 4 and restated:
+                rev = op = float("nan")
+            out.append({"code": code, "year": year, "q": q, "fs_div": g.loc[q, "fs_div"],
+                        "revenue": rev, "op_income": op})
     return pd.DataFrame(out)
 
 
@@ -110,9 +150,7 @@ def fetch_quarterly(codes: list[str], start_year: int, end_year: int, key: str) 
         for y in range(start_year, end_year + 1):
             for q in (1, 2, 3, 4):
                 try:
-                    rec = fetch_cumulative(code, corp, y, q, key)
-                    if rec:
-                        rows.append(rec)
+                    rows.extend(fetch_cumulative(code, corp, y, q, key))
                     time.sleep(0.15)
                 except Exception as e:
                     failed.append((code, f"{y}Q{q} {str(e)[:80]}"))
@@ -121,7 +159,7 @@ def fetch_quarterly(codes: list[str], start_year: int, end_year: int, key: str) 
     cum = pd.DataFrame(rows)
     if cum.empty:
         return cum, cum
-    return cumulative_to_quarterly(cum), cum
+    return cumulative_to_quarterly(choose_basis(cum)), cum
 
 
 def fetch_disclosure_dates(codes: list[str], start_year: int, end_year: int, key: str) -> pd.DataFrame:

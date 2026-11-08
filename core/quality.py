@@ -38,9 +38,15 @@ def fin_checks(qf: pd.DataFrame, cum: pd.DataFrame | None = None) -> dict[str, p
         "nonpositive_revenue": qf[qf["revenue"] <= 0],
         "missing_revenue": qf[qf["revenue"].isna()],
     }
-    if cum is not None and {"rev_cur"}.issubset(cum.columns):
-        m = qf.merge(cum[["code", "year", "q", "rev_cur"]], on=["code", "year", "q"])
-        m = m[m["q"].isin([2, 3])]  # 반기·3분기 보고서의 3개월 단독 금액과 대조
-        rel = (m["revenue"] - m["rev_cur"]).abs() / m["rev_cur"].abs()
-        out["derived_vs_reported_gt1pct"] = m[rel > 0.01]
+    if cum is not None and {"rev_cur", "rev_cum", "fs_div"}.issubset(cum.columns):
+        # 실제로 쓴 기준(fs_div)의 원자료에서, 2·3분기 '누적 차분'과 '회사가 적은 3개월 금액'이 1% 넘게 다른 보고서
+        # = 앞 분기를 고쳐 쓴(분할·중단영업) 해. 분기값은 회사 기재 금액을 쓰고, 그 해 4분기는 NaN 처리됨.
+        c = cum.merge(qf[["code", "year", "q", "fs_div"]].drop_duplicates(), on=["code", "year", "q", "fs_div"])
+        c = c.sort_values(["code", "fs_div", "year", "q"])
+        prev = c.groupby(["code", "fs_div", "year"])["rev_cum"].shift(1)
+        prev_q = c.groupby(["code", "fs_div", "year"])["q"].shift(1)
+        m = c[c["q"].isin([2, 3]) & (prev_q == c["q"] - 1)].copy()
+        m["derived"] = (m["rev_cum"] - prev.loc[m.index])
+        rel = (m["derived"] - m["rev_cur"]).abs() / m["rev_cur"].abs()
+        out["restated_year_q4_dropped"] = m[rel > 0.01][["code", "year", "q", "fs_div", "derived", "rev_cur"]]
     return out

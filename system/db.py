@@ -14,7 +14,7 @@ import pandas as pd
 KEYS = {
     "weather_daily": ["stn", "date"],
     "fin_quarterly": ["code", "year", "q"],
-    "fin_cumulative_raw": ["code", "year", "q"],
+    "fin_cumulative_raw": ["code", "year", "q", "fs_div"],
     "prices": ["code", "date"],
     "market": ["date"],
     "disclosures": ["code", "year", "q"],

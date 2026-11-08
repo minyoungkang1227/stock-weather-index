@@ -37,7 +37,7 @@ FIRMS = {
     "020000": ("한섬", "apparel", "NATIONAL", "TAVG"),
     "093050": ("LF", "apparel", "NATIONAL", "TAVG"),
     "031430": ("신세계인터내셔날", "apparel", "NATIONAL", "TAVG"),
-    "081660": ("휠라홀딩스", "apparel", "NATIONAL", "TAVG"),
+    "081660": ("미스토홀딩스", "apparel", "NATIONAL", "TAVG"),   # 2025-04 휠라홀딩스에서 사명 변경(같은 회사·같은 종목코드)
     "139480": ("이마트", "retail", "NATIONAL", "TAVG"),
     "023530": ("롯데쇼핑", "retail", "NATIONAL", "TAVG"),
     "069960": ("현대백화점", "retail", "NATIONAL", "TAVG"),

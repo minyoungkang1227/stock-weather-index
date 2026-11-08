@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from collect.dart import cumulative_to_quarterly  # noqa: E402
+from collect.dart import choose_basis, cumulative_to_quarterly  # noqa: E402
 from core import indices, panel, quality, regress  # noqa: E402
 
 
@@ -65,6 +65,37 @@ def test_dart_cumulative_to_quarterly():
     # 같은 해에 연결/별도가 섞이면 차분하지 않음
     mixed = cum.assign(fs_div=["CFS", "OFS", "CFS", "CFS"])
     assert np.isnan(cumulative_to_quarterly(mixed).set_index("q").loc[3, "revenue"])
+
+
+def test_dart_reported_quarter_and_restated_year():
+    """롯데쇼핑 2017 형태: 3분기 보고서가 앞 분기를 고쳐 씀.
+    누적 100, 250, 300, 400 / 회사 기재 3개월: 2분기 150, 3분기 120 (차분 50과 다름)
+    -> 분기 100, 150, 120, 4분기는 NaN(그 해는 고쳐 쓰인 해)."""
+    cum = pd.DataFrame({"code": "X", "year": 2017, "q": [1, 2, 3, 4], "fs_div": "CFS",
+                        "rev_cum": [100, 250, 300, 400], "rev_cur": [100, 150, 120, 400],
+                        "op_cum": [10, 25, 30, 40], "op_cur": [10, 15, 12, 40]})
+    qf = cumulative_to_quarterly(cum).set_index("q")
+    assert qf.loc[[1, 2, 3], "revenue"].tolist() == [100, 150, 120] and np.isnan(qf.loc[4, "revenue"])
+    assert qf.loc[[1, 2, 3], "op_income"].tolist() == [10, 15, 12] and np.isnan(qf.loc[4, "op_income"])
+    # 고쳐 쓰지 않은 해: 3분기 기재액 = 차분 80 -> 4분기 = 400 - 330 = 70
+    ok = cum.assign(rev_cum=[100, 250, 330, 400], rev_cur=[100, 150, 80, 400])
+    assert cumulative_to_quarterly(ok).set_index("q").loc[4, "revenue"] == 70
+
+
+def test_dart_choose_basis_one_per_firm():
+    """인천도시가스 형태: 별도는 매 분기, 연결은 2018년 2분기부터만 -> 별도 하나로 전 기간."""
+    rows = []
+    for y in (2017, 2018):
+        for q in (1, 2, 3, 4):
+            rows.append(dict(code="G", year=y, q=q, fs_div="OFS", rev_cum=100.0 * q, rev_cur=100.0, op_cum=1.0, op_cur=1.0))
+            if (y, q) >= (2018, 2):
+                rows.append(dict(code="G", year=y, q=q, fs_div="CFS", rev_cum=110.0 * q, rev_cur=110.0, op_cum=1.0, op_cur=1.0))
+            rows.append(dict(code="H", year=y, q=q, fs_div="CFS", rev_cum=50.0 * q, rev_cur=50.0, op_cum=1.0, op_cur=1.0))
+            rows.append(dict(code="H", year=y, q=q, fs_div="OFS", rev_cum=5.0 * q, rev_cur=5.0, op_cum=1.0, op_cur=1.0))
+    b = choose_basis(pd.DataFrame(rows))
+    assert set(b[b.code == "G"].fs_div) == {"OFS"} and set(b[b.code == "H"].fs_div) == {"CFS"}   # 동률이면 연결
+    qf = cumulative_to_quarterly(b)
+    assert qf["revenue"].notna().all() and (qf[qf.code == "G"]["revenue"] == 100).all()
 
 
 def test_growth_and_returns():
