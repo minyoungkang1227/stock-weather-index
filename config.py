@@ -20,7 +20,7 @@ NATIONAL = [108, 112, 133, 143, 156, 159]  # 전국형 기업에 쓰는 6개 도
 # 대상 종목: 코드 -> (기대 종목명, 업종그룹, 기상 매핑, 주 날씨지표)
 # 기대 종목명은 수집 시 실제 상장명과 대조해 다르면 그 종목을 멈추고 알립니다.
 # 기상 매핑: 정수 = 해당 지점, "NATIONAL" = 6개 도시 평균
-FIRMS = {
+FIRMS_ALL = {
     # 도시가스·지역난방 (난방도일)
     "017390": ("서울가스", "gas", 108, "HDD"),
     "004690": ("삼천리", "gas", 119, "HDD"),
@@ -43,6 +43,48 @@ FIRMS = {
     "069960": ("현대백화점", "retail", "NATIONAL", "TAVG"),
     "004170": ("신세계", "retail", "NATIONAL", "TAVG"),
 }
+
+# ---------- 사전 등록 (2026-11-09, 실데이터 결과를 보기 전에 고정) ----------
+# 이 블록은 결과를 본 뒤 바꾸지 않습니다. 바꿔야 하면 날짜와 이유를 남기고, 바꾸기 전 결과도 함께 보고합니다.
+PREREG_DATE = "2026-11-09"
+
+# 1) 표본 제외 규칙 (전 종목 공통): 국내 매출 비중이 이 값 미만이면 국내 날씨 분석에서 제외
+MIN_DOMESTIC_REV_SHARE = 0.5
+# 국내 매출 비중이 의심되는 종목만 근거와 함께 기록 (나머지는 국내 위주로 간주)
+DOMESTIC_REV_SHARE = {
+    # 2025년 2분기 연결매출 1조2,277억 중 아쿠쉬네트(미국 골프) 1조114억(82.4%) → 국내 비중 최대 17.6%
+    # 출처: 스마트투데이 2025-08 "미스토홀딩스, 2분기 매출 1.2조"
+    "081660": 0.176,
+}
+EXCLUDED = {c: f"국내 매출 비중 {v:.0%} < {MIN_DOMESTIC_REV_SHARE:.0%}"
+            for c, v in DOMESTIC_REV_SHARE.items() if v < MIN_DOMESTIC_REV_SHARE}
+# 수집은 전 종목(FIRMS_ALL), 분석은 제외 반영(FIRMS). 환경변수 SWI_INCLUDE_EXCLUDED=1 이면 참고용으로 전 종목 분석.
+import os as _os
+FIRMS = FIRMS_ALL if _os.getenv("SWI_INCLUDE_EXCLUDED") == "1" else {c: v for c, v in FIRMS_ALL.items() if c not in EXCLUDED}
+
+# 2) 1차(주 결과): 업종별 날씨 → 매출 민감도. 업종마다 검정 하나만 미리 지정.
+#    모형: 기업 고정효과 + 분기더미 + 연도더미, Driscoll-Kraay 표준오차, 종속변수 = 매출 전년동기 대비 로그성장률
+#    연도더미를 넣는 이유: 전국 날씨를 쓰는 업종은 모든 종목의 날씨값이 같아 사실상 시계열 회귀가 되므로,
+#    코로나 같은 연 단위 경기 충격과 날씨가 우연히 겹치는 것을 막기 위해 (대신 검정력은 낮아짐).
+#    부호: 가스 +(추운 겨울 → 매출↑), 음료 +(더운 여름 → 매출↑),
+#          의류·유통 −(4분기가 따뜻하면 겨울옷 매출↓). 의류·유통의 1~3분기 계수는 탐색용(판정에 안 씀).
+PREREG_STAGE1 = {
+    "gas":      {"y": "rev_g", "x": "HDD_yoy_100", "year_fe": True, "sign": +1},
+    "beverage": {"y": "rev_g", "x": "CDD_yoy_10", "year_fe": True, "sign": +1},
+    "apparel":  {"y": "rev_g", "x": "TAVG_yoy_Q4", "year_fe": True, "sign": -1},
+    "retail":   {"y": "rev_g", "x": "TAVG_yoy_Q4", "year_fe": True, "sign": -1},
+}
+PREREG_STAGE1_BH_Q = 0.10      # 4개 업종 단측 p값에 Benjamini-Hochberg 보정 후 이 값 이하
+PREREG_STAGE1_MIN_T = 2.0      # 그리고 |t| >= 2, 부호가 위와 같아야 통과
+
+# 3) 2차: 1차를 통과한 업종만 모아 SWI 업종 내 롱숏(상위1/3-하위1/3, 왕복 30bp 차감) 월수익의
+#    '평가구간'(모델 선택 구간 이후) Newey-West t >= 2. 1차 실패 업종은 2차 결과를 효과로 해석하지 않음.
+PREREG_STAGE2 = {"score": "SWI", "window": "평가구간", "ranking": "업종 내", "min_t": 2.0}
+# 보조 지표(판정에 안 씀): 상승확률 모델 AUC(날씨 포함 - 미포함) 부트스트랩 구간
+
+# 4) 일본 자료: 어떤 업종의 한국 유효 분기 수가 MIN_FIRM_OBS 미만이거나 β 추정이 불가할 때만 '참고값'으로 표시.
+#    판정·점수 계산에는 섞지 않음. (2026-11 기준 4개 업종 모두 한국 자료로 추정 가능 → 미사용)
+JAPAN_FALLBACK = {"use_only_if_korean_obs_below": "MIN_FIRM_OBS", "affects_scores": False}
 
 MARKET_INDEX = "KS11"  # KOSPI
 
@@ -91,7 +133,9 @@ MODEL_DIR = "models"
 # 코드가 맞지 않으면 수집 시 오류로 표시됩니다. 기상청 예보구역 코드표로 확인하세요.
 FORECAST_REG = {108: "11B10101", 112: "11B20201", 119: "11B20601", 133: "11C20401",
                 143: "11H10701", 152: "11H20101", 156: "11F20501", 159: "11H20201"}
-FORECAST_ERR_SD = 2.0            # 중기예보 일평균기온 오차 표준편차(℃) 가정 — 예보가 쌓이면 실제 오차로 교체
+FORECAST_ERR_SD = 2.0            # 중기예보 일평균기온 오차 표준편차(℃) 가정 — 아래 모델 파일이 없을 때만 사용
+# 실제 예보 이력 vs 관측으로 만든 리드별 편향·공분산 (python run_collect.py forecast_err 로 생성). 없으면 위 가정값.
+FORECAST_ERR_MODEL_PATH = "data/processed/forecast_err_model.csv"
 CLIM_SMOOTH_DAYS = 15            # 일별 평년값을 앞뒤로 평균내는 창(일)
 GATE_WEATHER_STALE_DAYS = 5      # 관측이 이보다 오래되면 지수 산출 중단
 GATE_PRICE_STALE_DAYS = 7

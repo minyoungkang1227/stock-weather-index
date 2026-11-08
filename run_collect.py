@@ -49,7 +49,7 @@ if "weather" in steps:
 if "dart" in steps:
     print("[2] OpenDART 분기 실적")
     if os.getenv("DART_API_KEY"):
-        qf, cum = dart.fetch_quarterly(list(C.FIRMS), C.ANALYSIS_START_YEAR - 1, C.ANALYSIS_END_YEAR,
+        qf, cum = dart.fetch_quarterly(list(C.FIRMS_ALL), C.ANALYSIS_START_YEAR - 1, C.ANALYSIS_END_YEAR,
                                        os.environ["DART_API_KEY"])
         if not qf.empty:
             save(qf, "fin_quarterly")
@@ -63,7 +63,7 @@ if "prices" in steps:
     print("[3] 주가 (FinanceDataReader)")
     names = prices.listing_names()
     keep = []
-    for code, (exp, *_rest) in C.FIRMS.items():
+    for code, (exp, *_rest) in C.FIRMS_ALL.items():
         actual = names.get(code)
         if actual is None or actual.replace(" ", "") != exp.replace(" ", ""):
             print(f"  [중단] {code}: 기대 '{exp}' / 실제 '{actual}' -> 이 종목은 수집하지 않습니다. config.py 확인")
@@ -92,7 +92,7 @@ if "ecos" in steps:
 if "disclosure" in steps:
     print("[5] 실적 공시일 (이벤트 스터디용)")
     if os.getenv("DART_API_KEY"):
-        dd = dart.fetch_disclosure_dates(list(C.FIRMS), C.ANALYSIS_START_YEAR, C.ANALYSIS_END_YEAR,
+        dd = dart.fetch_disclosure_dates(list(C.FIRMS_ALL), C.ANALYSIS_START_YEAR, C.ANALYSIS_END_YEAR,
                                          os.environ["DART_API_KEY"])
         if not dd.empty:
             save(dd, "disclosures")
@@ -110,9 +110,22 @@ if "forecast_hist" in steps:
             save(f, "forecast_mid")
             wpath = f"{C.RAW}/weather_daily.csv"
             if os.path.exists(wpath):
-                sk = kma_apihub.forecast_skill(f, pd.read_csv(wpath, parse_dates=["date"]))
-                save(sk, "forecast_skill")
-                print(sk.round(2).to_string(index=False))
-                print("  -> 위 sd(리드별 예보 오차)로 config.FORECAST_ERR_SD 를 바꿀 수 있습니다.")
+                steps.add("forecast_err")
     else:
         print("  건너뜀: .env 에 KMA_APIHUB_KEY 가 없습니다.")
+
+if "forecast_err" in steps:
+    print("[7] 예보 오차 모델 (예보 이력 vs 관측)")
+    fpath, wpath = f"{C.RAW}/forecast_mid.csv", f"{C.RAW}/weather_daily.csv"
+    if os.path.exists(fpath) and os.path.exists(wpath):
+        fc = pd.read_csv(fpath, dtype={"issued_at": str})
+        obs = pd.read_csv(wpath, parse_dates=["date"])
+        em = kma_apihub.forecast_error_model(fc, obs)
+        os.makedirs(os.path.dirname(C.FORECAST_ERR_MODEL_PATH), exist_ok=True)
+        em.to_csv(C.FORECAST_ERR_MODEL_PATH, encoding="utf-8-sig")
+        sd = pd.Series({k: em.at[k, f"lead_{k}"] ** 0.5 for k in em.index if f"lead_{k}" in em})
+        corr = {k: em.at[k, f"lead_{k+1}"] / (sd[k] * sd[k + 1]) for k in em.index if k + 1 in sd and f"lead_{k+1}" in em}
+        print(pd.DataFrame({"n": em["n"], "bias": em["bias"], "sd": sd, "다음날과_상관": pd.Series(corr)}).round(2).to_string())
+        print(f"  -> {C.FORECAST_ERR_MODEL_PATH} (있으면 nowcast 가 자동으로 사용)")
+    else:
+        print("  건너뜀: forecast_mid.csv 와 weather_daily.csv 가 모두 있어야 합니다.")

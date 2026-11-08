@@ -10,6 +10,7 @@ import pandas as pd
 
 import config as C
 from core import indices, panel, quality, regress
+from swi import prereg
 
 R = C.RAW
 
@@ -122,16 +123,27 @@ def main(split_year: int = 2021) -> None:
     oos = pd.DataFrame(oos)
     res.to_csv(f"{C.OUTPUT}/results.csv", index=False, encoding="utf-8-sig")
     oos.to_csv(f"{C.OUTPUT}/oos.csv", index=False, encoding="utf-8-sig")
-    write_report(res, oos, p, split_year)
+    s1 = None
+    if not res.empty:
+        s1 = prereg.stage1(res, C.PREREG_STAGE1, C.PREREG_STAGE1_BH_Q, C.PREREG_STAGE1_MIN_T)
+        s1.to_csv(f"{C.OUTPUT}/prereg_stage1.csv", index=False, encoding="utf-8-sig")
+        print(s1[["group", "x", "coef", "t", "q_bh", "pass"]].round(3).to_string(index=False))
+    write_report(res, oos, p, split_year, s1)
     print("완료: output/results.csv, output/oos.csv, output/report.md")
 
 
-def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int) -> None:
+def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None) -> None:
     lines = ["# 날씨지수 분석 결과", "",
              f"- 기간 {C.ANALYSIS_START_YEAR}~{C.ANALYSIS_END_YEAR}, 기업 {p['code'].nunique()}개",
              "- 모형: 기업 고정효과 + 분기더미 (+연도더미 버전), Driscoll-Kraay 표준오차",
              "- 날씨 단위: HDD 100도일, CDD 10도일, 폭염 1일, 기온 1℃ (모두 전년 동분기 대비 변화)",
              "- p_bh: 전체 검정에 대한 Benjamini-Hochberg 보정 p값", ""]
+    if C.EXCLUDED:
+        lines += ["- 사전 규칙으로 제외: " + ", ".join(f"{c}({r})" for c, r in C.EXCLUDED.items())
+                  + (" — 이번 실행은 SWI_INCLUDE_EXCLUDED=1 로 포함한 참고 버전" if len(C.FIRMS) == len(C.FIRMS_ALL) else ""), ""]
+    if s1 is not None:
+        lines += prereg.stage1_markdown(s1, C.PREREG_STAGE1_BH_Q, C.PREREG_STAGE1_MIN_T, C.PREREG_DATE)
+        lines += ["## 탐색 결과 (판정에 쓰지 않음)", ""]
     if not res.empty:
         show = res[["group", "y", "x", "year_fe", "coef", "se", "t", "p", "p_bh", "nobs", "n_firms"]].round(4)
         lines += ["## 회귀 결과", "", show.to_markdown(index=False), ""]

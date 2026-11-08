@@ -11,7 +11,7 @@ import pandas as pd
 import config as C
 from core import panel
 from run_analysis import load, stop
-from swi import decision, engine, event, index, inputs, volume
+from swi import decision, engine, event, index, inputs, prereg, volume
 
 
 def make_sens(fin_p):
@@ -166,7 +166,20 @@ def main() -> None:
                                                                    encoding="utf-8-sig")
     d.to_csv(f"{C.OUTPUT}/swi_monthly.csv", index=False, encoding="utf-8-sig")
     latest.to_csv(f"{C.OUTPUT}/swi_latest.csv", index=False, encoding="utf-8-sig")
-    write_report(d, ev, chosen, aucd, latest, bt, sel_end, oos_months, ev_tab, ev_verdict, ev_info, per_group)
+    # 사전 등록 2차 판정: 1차(run_analysis)를 통과한 업종만
+    s1_path = f"{C.OUTPUT}/prereg_stage1.csv"
+    if os.path.exists(s1_path):
+        s1 = pd.read_csv(s1_path)
+        passed = s1.loc[s1["pass"].astype(str).str.lower() == "true", "group"].tolist()
+        s2 = prereg.stage2(test, passed, C.PREREG_STAGE2, decision.long_short_within, decision.summarize,
+                           C.COST_BPS_ROUNDTRIP)
+    else:
+        s1, s2 = None, dict(verdict="미실행", reason="run_analysis.py 를 먼저 실행해야 1차 판정이 생깁니다.", groups=[])
+    pd.DataFrame([{k: (", ".join(v) if isinstance(v, list) else v) for k, v in s2.items()}]).to_csv(
+        f"{C.OUTPUT}/prereg_stage2.csv", index=False, encoding="utf-8-sig")
+    print(f"[사전 등록 2차] {s2['verdict']}: {s2['reason']}")
+    write_report(d, ev, chosen, aucd, latest, bt, sel_end, oos_months, ev_tab, ev_verdict, ev_info, per_group,
+                 (s1, s2))
     print("완료: output/swi_report.md")
 
 
@@ -218,9 +231,20 @@ def run_event_study(e, fin_p, px, mkt, get_sens):
 
 
 def write_report(d, ev, chosen, aucd, latest, bt, sel_end, oos_months, ev_tab=None, ev_verdict="", ev_info=None,
-                 per_group=None) -> None:
+                 per_group=None, prereg_res=None) -> None:
     r = lambda x, k=3: x.round(k).to_markdown(index=False)
-    L = ["# Stock Weather Index 시제품 결과", "",
+    L = ["# Stock Weather Index 시제품 결과", ""]
+    if prereg_res is not None:
+        s1, s2 = prereg_res
+        L += [f"## 사전 등록 판정 (등록일 {C.PREREG_DATE}) — 이 절이 결론이고, 아래 표들은 이를 설명하는 자료입니다", ""]
+        if s1 is not None:
+            L += [f"- 1차 (날씨→매출): 통과 업종 = {', '.join(s1.loc[s1['pass'].astype(str).str.lower() == 'true', 'group']) or '없음'}"
+                  f" (전체 {len(s1)}개 업종 중)"]
+        L += [f"- 2차 (SWI 업종 내 롱숏, 평가구간): **{s2['verdict']}** — {s2['reason']}",
+              "- 1차를 통과하지 못한 업종의 주가 결과는 날씨 효과로 해석하지 않습니다.", ""]
+        if C.EXCLUDED:
+            L += ["- 규칙으로 제외된 종목: " + ", ".join(f"{c}({x})" for c, x in C.EXCLUDED.items()), ""]
+    L += [
          "## 아키텍처 대응", "",
          "| 구조도 단계 | 구현 내용 |", "|---|---|",
          "| 기상정보 (기온·강수·한파) | 관측소 8곳 일자료 → 난방·냉방도일, 폭염일, 한파일(최저 −12℃ 이하), 강수량. 월말마다 '관측된 달 + 남은 달 평년'으로 이번 분기 예상 |",

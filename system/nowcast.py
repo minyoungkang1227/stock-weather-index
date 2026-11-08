@@ -2,7 +2,9 @@
 
 월말 백테스트(swi/inputs.py)와 같은 지표를 일 단위로 만듭니다. 출력 열 이름도 같아서 같은 점수 공식을 그대로 씁니다.
 - 평년: 그 해 '이전' 30년의 같은 날짜 값을 평균하고 앞뒤 15일로 다듬음 (하루 단위 평년은 잡음이 크기 때문)
-- 불확실성: 평년으로 채운 기간은 과거 같은 기간 합계의 표준편차, 예보로 채운 날은 예보 오차(FORECAST_ERR_SD)를 더함
+- 불확실성: 평년으로 채운 기간은 과거 같은 기간 합계의 표준편차, 예보로 채운 날은 예보 오차를 더함.
+  예보 오차 모델 파일(cfg.FORECAST_ERR_MODEL_PATH)이 있으면 리드별 평균 오차를 빼고(편향 보정),
+  분산은 리드 사이 공분산까지 더함(1'Σ1). 없으면 예전처럼 일수 × FORECAST_ERR_SD² (독립 가정).
 - 예보에는 강수량이 없어 강수는 예보일에도 평년을 씁니다.
 """
 from __future__ import annotations
@@ -11,6 +13,38 @@ import numpy as np
 import pandas as pd
 
 VARS = ["HDD", "CDD", "HOT", "COLD", "RAIN", "TSUM"]
+_ERR_CACHE: dict = {}
+
+
+def load_err_model(cfg) -> pd.DataFrame | None:
+    path = getattr(cfg, "FORECAST_ERR_MODEL_PATH", None)
+    if not path:
+        return None
+    import os
+    if not os.path.exists(path):
+        return None
+    key = (path, os.path.getmtime(path))
+    if key not in _ERR_CACHE:
+        _ERR_CACHE.clear()
+        _ERR_CACHE[key] = pd.read_csv(path, index_col="lead_day")
+    return _ERR_CACHE[key]
+
+
+def forecast_sum_var(leads, model: pd.DataFrame | None, sd_default: float) -> float:
+    """예보로 채운 날들의 '일평균기온 합' 오차 분산. leads = 그날들의 리드(일) 목록.
+    모델 없으면 독립 가정 n·sd². 모델에 없는 리드 쌍은: 대각은 sd², 비대각은 0."""
+    leads = [int(x) for x in leads]
+    if model is None:
+        return len(leads) * sd_default ** 2
+    tot = 0.0
+    for a in leads:
+        for b in leads:
+            col = f"lead_{b}"
+            v = model.at[a, col] if (a in model.index and col in model.columns) else np.nan
+            if pd.isna(v):
+                v = sd_default ** 2 if a == b else 0.0
+            tot += v
+    return float(tot)
 
 
 def daily_index(w: pd.DataFrame, base=18.0, hot=33.0, cold=-12.0) -> pd.DataFrame:
@@ -92,6 +126,10 @@ def nowcast_station(s: pd.DataFrame, fc: pd.DataFrame | None, asof: pd.Timestamp
             f.index = pd.to_datetime(f.index)
             fc_days = f.index
             tav = (f["tmin"] + f["tmax"]) / 2
+            err_model = load_err_model(cfg)
+            has_lead = "lead_day" in f.columns and f["lead_day"].notna().all()
+            if err_model is not None and has_lead:   # (최저+최고)/2 는 하루 평균기온과 체계적으로 다름 → 리드별 평균 오차 제거
+                tav = tav - f["lead_day"].astype(int).map(err_model["bias"]).fillna(0.0).values
             part_fc = pd.Series({
                 "HDD": (cfg.BASE_TEMP - tav).clip(lower=0).sum(), "CDD": (tav - cfg.BASE_TEMP).clip(lower=0).sum(),
                 "HOT": (f["tmax"] >= cfg.HEATWAVE_TMAX).sum(), "COLD": (f["tmin"] <= cfg.COLD_TMIN).sum(),
@@ -110,8 +148,12 @@ def nowcast_station(s: pd.DataFrame, fc: pd.DataFrame | None, asof: pd.Timestamp
     else:
         rest_sd = pd.Series(0.0, index=VARS)
     fc_var = pd.Series(0.0, index=VARS)
-    for v in ("HDD", "CDD", "TSUM"):
-        fc_var[v] = len(fc_days) * cfg.FORECAST_ERR_SD ** 2
+    if len(fc_days):
+        model = load_err_model(cfg) if ("lead_day" in f.columns and f["lead_day"].notna().all()) else None
+        leads = f["lead_day"].tolist() if model is not None else [0] * len(fc_days)
+        v_sum = forecast_sum_var(leads, model, cfg.FORECAST_ERR_SD)
+        for v in ("HDD", "CDD", "TSUM"):
+            fc_var[v] = v_sum
     sd = np.sqrt(rest_sd.fillna(np.nan) ** 2 + fc_var)
 
     # 작년 같은 분기, 분기 평년·표준편차

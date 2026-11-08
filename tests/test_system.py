@@ -39,13 +39,19 @@ def test_parse_item():
     assert f.loc[4, "target_date"] == "2026-11-13" and f.loc[5, "tmin"] == -2.0
 
 
+def _cfg(**over):
+    """config 를 복사해 일부 값만 바꾼 설정 (PC에 오차 모델 파일이 생겨도 테스트가 흔들리지 않게)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(**{**{k: getattr(C, k) for k in dir(C) if k.isupper()}, **over})
+
+
 def test_nowcast_hand_calc():
     dates = pd.date_range("1980-01-01", "2023-02-13")
     w = pd.DataFrame({"stn": 108, "date": dates, "tavg": 10.0, "tmin": 5.0, "tmax": 15.0, "rain": np.nan})
     fc = pd.DataFrame({"issued_at": "202302140600", "stn": 108, "lead_day": range(3, 11),
                        "target_date": pd.date_range("2023-02-17", "2023-02-24").strftime("%Y-%m-%d"),
                        "tmin": 0.0, "tmax": 10.0})
-    nc = nowcast.nowcast(w, fc, pd.Timestamp("2023-02-14"), C).set_index("stn").loc["108"]
+    nc = nowcast.nowcast(w, fc, pd.Timestamp("2023-02-14"), _cfg(FORECAST_ERR_MODEL_PATH=None)).set_index("stn").loc["108"]
     assert nc["n_obs"] == 44 and nc["n_fc"] == 8 and nc["n_clim"] == 38
     assert abs(nc["HDD_obs"] - 8 * 44) < 1e-9          # 관측: 평균 10℃ -> 하루 8
     assert abs(nc["HDD_fc"] - 13 * 8) < 1e-9           # 예보: (0+10)/2=5℃ -> 하루 13
@@ -136,3 +142,94 @@ def test_apihub_asos_comma_format_trailing_comma():
     d = kma_apihub.asos_standard(raw).set_index("stn")
     assert (d.loc[108, "tavg"], d.loc[108, "tmax"], d.loc[108, "tmin"], d.loc[108, "rain"]) == (3.3, 7.3, -0.3, 0.0)
     assert (d.loc[112, "tavg"], d.loc[112, "tmax"], d.loc[112, "tmin"]) == (2.9, 5.2, 0.2)
+
+
+
+# ---------- 예보 오차 모델 (리드 간 상관) ----------
+def test_forecast_error_model_hand_calc():
+    """발표 A: 4일 뒤 +1, 5일 뒤 +2 / 발표 B: -1, -2 (관측 0℃).
+    편향 0, 분산 l4 = 2, l5 = 8 (n-1로 나눔), 공분산 (1·2 + (-1)(-2))/1 = 4 → 상관 1."""
+    fc = pd.DataFrame({"issued_at": ["A", "A", "B", "B"], "stn": 108, "lead_day": [4, 5, 4, 5],
+                       "target_date": ["2024-01-05", "2024-01-06", "2024-01-07", "2024-01-08"],
+                       "tmin": [0.0, 1.0, -2.0, -3.0], "tmax": [2.0, 3.0, 0.0, -1.0]})   # 평균 1, 2, -1, -2
+    obs = pd.DataFrame({"stn": 108, "date": pd.date_range("2024-01-05", "2024-01-08"), "tavg": 0.0})
+    m = kma_apihub.forecast_error_model(fc, obs, min_pairs=2)
+    assert m.loc[4, "bias"] == 0 and m.loc[5, "bias"] == 0
+    assert abs(m.loc[4, "lead_4"] - 2) < 1e-12 and abs(m.loc[5, "lead_5"] - 8) < 1e-12 and abs(m.loc[4, "lead_5"] - 4) < 1e-12
+
+
+def test_forecast_sum_var_hand_calc():
+    m = pd.DataFrame({"bias": [0.0, 0.0], "lead_4": [2.0, 4.0], "lead_5": [4.0, 8.0]}, index=pd.Index([4, 5], name="lead_day"))
+    assert nowcast.forecast_sum_var([4, 5], m, 2.0) == 2 + 8 + 4 + 4      # 1'Σ1 = 18
+    assert nowcast.forecast_sum_var([4, 5], None, 2.0) == 2 * 4            # 독립 가정 = 8 (과소)
+    assert nowcast.forecast_sum_var([3, 4], m, 2.0) == 4 + 2               # 모델에 없는 리드 3: 대각 sd², 상관 0
+
+
+def test_nowcast_uses_error_model():
+    """리드 3~10 전부 분산 1·공분산 0.5, 편향 +1℃ → 예보 평균 5℃에서 1℃ 빼 4℃: HDD 하루 14 × 8일 = 112,
+    분산 = 8×1 + 56×0.5 = 36 → sd 6 (독립 가정이면 sqrt(8))."""
+    leads = list(range(3, 11))
+    m = pd.DataFrame({"n": 100, "bias": 1.0, **{f"lead_{k}": [1.0 if j == k else 0.5 for j in leads] for k in leads}},
+                     index=pd.Index(leads, name="lead_day"))
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "em.csv")
+        m.to_csv(path)
+        dates = pd.date_range("1980-01-01", "2023-02-13")
+        w = pd.DataFrame({"stn": 108, "date": dates, "tavg": 10.0, "tmin": 5.0, "tmax": 15.0, "rain": np.nan})
+        fc = pd.DataFrame({"issued_at": "202302140600", "stn": 108, "lead_day": leads,
+                           "target_date": pd.date_range("2023-02-17", "2023-02-24").strftime("%Y-%m-%d"),
+                           "tmin": 0.0, "tmax": 10.0})
+        nc = nowcast.nowcast(w, fc, pd.Timestamp("2023-02-14"), _cfg(FORECAST_ERR_MODEL_PATH=path)).set_index("stn").loc["108"]
+    assert abs(nc["HDD_fc"] - 112) < 1e-9 and abs(nc["HDD_sd"] - 6.0) < 1e-9
+
+
+# ---------- 사전 등록 ----------
+from swi import prereg  # noqa: E402
+
+
+def test_exclusion_rule():
+    assert "081660" in C.FIRMS_ALL and "081660" not in C.FIRMS and len(C.FIRMS) == len(C.FIRMS_ALL) - 1
+    assert "081660" in C.EXCLUDED
+
+
+def test_prereg_stage1_hand_calc():
+    from scipy import stats
+    spec = C.PREREG_STAGE1
+    res = pd.DataFrame([
+        dict(group="gas", y="rev_g", x="HDD_yoy_100", year_fe=True, coef=0.3, se=0.1, t=3.0, p=0.0, nobs=200, n_periods=40),
+        dict(group="beverage", y="rev_g", x="CDD_yoy_10", year_fe=True, coef=0.21, se=0.1, t=2.1, p=0.0, nobs=150, n_periods=40),
+        dict(group="apparel", y="rev_g", x="TAVG_yoy_Q4", year_fe=True, coef=-0.25, se=0.1, t=-2.5, p=0.0, nobs=150, n_periods=40),
+        dict(group="retail", y="rev_g", x="TAVG_yoy_Q4", year_fe=True, coef=0.25, se=0.1, t=2.5, p=0.0, nobs=150, n_periods=40),
+        # 미끼: 사전 지정이 아닌 모형(연도더미 없음)은 t=10이어도 판정에 쓰이면 안 됨
+        dict(group="retail", y="rev_g", x="TAVG_yoy_Q4", year_fe=False, coef=-1.0, se=0.1, t=-10.0, p=0.0, nobs=150, n_periods=40),
+        dict(group="retail", y="rev_g", x="TAVG_yoy_Q1", year_fe=True, coef=-1.0, se=0.1, t=-10.0, p=0.0, nobs=150, n_periods=40),
+    ])
+    s = prereg.stage1(res, spec, 0.10, 2.0).set_index("group")
+    p = {g: stats.t.sf(t * spec[g]["sign"], 39) for g, t in [("gas", 3.0), ("beverage", 2.1), ("apparel", -2.5), ("retail", 2.5)]}
+    # BH 손계산: 작은 순서 gas(1) < apparel(2) < beverage(3) < retail(4), q_i = min_{j>=i} p_(j)·4/j
+    q_ret = p["retail"]
+    q_bev = min(p["beverage"] * 4 / 3, q_ret)
+    q_app = min(p["apparel"] * 4 / 2, q_bev)
+    q_gas = min(p["gas"] * 4 / 1, q_app)
+    for g, q in [("gas", q_gas), ("apparel", q_app), ("beverage", q_bev), ("retail", q_ret)]:
+        assert abs(s.loc[g, "q_bh"] - q) < 1e-12 and abs(s.loc[g, "p_one"] - p[g]) < 1e-12
+    assert s.loc["gas", "pass"] and s.loc["beverage", "pass"] and s.loc["apparel", "pass"]
+    assert not s.loc["retail", "pass"] and not s.loc["retail", "sign_ok"]   # 부호 반대 → 미통과 (미끼 무시)
+
+
+def test_prereg_stage2_only_passed_groups():
+    from swi import decision
+    rng = np.random.default_rng(0)
+    rows = []
+    for ym in pd.period_range("2022-01", "2023-12", freq="M"):
+        for g in ("gas", "retail"):
+            for i in range(6):
+                sc = float(i)
+                # gas: 점수 높은 종목이 매달 1%p 더 오름 / retail: 점수와 무관한 잡음
+                r = (0.01 * (i >= 4) - 0.01 * (i < 2)) if g == "gas" else rng.normal(0, 0.05)
+                rows.append(dict(ym=str(ym), code=f"{g}{i}", group=g, SWI=sc, fwd_xret=r + rng.normal(0, 0.001)))
+    d = pd.DataFrame(rows)
+    s2 = prereg.stage2(d, ["gas"], C.PREREG_STAGE2, decision.long_short_within, decision.summarize, 30)
+    assert s2["verdict"] == "통과" and s2["groups"] == ["gas"] and s2["months"] == 24
+    none = prereg.stage2(d, [], C.PREREG_STAGE2, decision.long_short_within, decision.summarize, 30)
+    assert none["verdict"] == "해당 없음"

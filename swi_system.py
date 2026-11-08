@@ -75,7 +75,7 @@ def cmd_daily(asof: pd.Timestamp) -> None:
             msgs.append("KMA_APIHUB_KEY·DATA_GO_KR_KEY 없음: 관측·예보 갱신 생략")
         try:
             start = (asof - pd.Timedelta(days=40)).strftime("%Y-%m-%d")
-            px = prices.fetch_prices(list(C.FIRMS), start)
+            px = prices.fetch_prices(list(C.FIRMS_ALL), start)
             mk = prices.fetch_prices([C.MARKET_INDEX], start).drop(columns="code")
             msgs.append(f"주가 {db.upsert(C.DB_PATH, 'prices', px)}행, 지수 {db.upsert(C.DB_PATH, 'market', mk)}행")
         except Exception as e:  # 주가 수집 실패는 품질 점검(신선도)에서 걸러짐

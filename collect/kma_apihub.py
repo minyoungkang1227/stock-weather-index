@@ -247,3 +247,32 @@ def forecast_skill(fc: pd.DataFrame, obs: pd.DataFrame) -> pd.DataFrame:
     m["err"] = m["fc_tavg"] - m["tavg"]
     return m.groupby("lead_day")["err"].agg(n="count", bias="mean", sd="std",
                                             mae=lambda e: np.mean(np.abs(e))).reset_index()
+
+
+def forecast_error_model(fc: pd.DataFrame, obs: pd.DataFrame, min_pairs: int = 30) -> pd.DataFrame:
+    """리드별 평균 오차(bias)와 리드 사이 오차 공분산.
+
+    같은 발표(issued_at)·같은 지점의 4일 뒤 오차와 5일 뒤 오차는 같은 날씨 흐름을 놓쳐 함께 틀리는 경향이 있어
+    서로 독립이 아닙니다. 분기 합계의 불확실성 = 쓰인 리드들 공분산 행렬의 모든 칸 합(1'Σ1)이어야 하고,
+    '하루 오차² × 일수'(독립 가정)는 양의 상관이 있으면 과소추정합니다.
+    반환: index=lead_day, 열 = n, bias, 그리고 각 리드 lead_k 와의 공분산(℃²).
+    """
+    f = fc.copy()
+    f["date"] = pd.to_datetime(f["target_date"])
+    f["fc_tavg"] = (f["tmin"] + f["tmax"]) / 2
+    o = obs[["stn", "date", "tavg"]].copy()
+    o["stn"] = o["stn"].astype(int)
+    o["date"] = pd.to_datetime(o["date"])
+    f["stn"] = f["stn"].astype(int)
+    m = f.merge(o, on=["stn", "date"], how="inner").dropna(subset=["fc_tavg", "tavg"])
+    m["err"] = m["fc_tavg"] - m["tavg"]
+    bias = m.groupby("lead_day")["err"].mean()
+    n = m.groupby("lead_day")["err"].size()
+    wide = m.pivot_table(index=["issued_at", "stn"], columns="lead_day", values="err", aggfunc="mean")
+    cov = (wide - bias).cov(min_periods=min_pairs)
+    out = pd.DataFrame({"n": n, "bias": bias})
+    for k in cov.columns:
+        out[f"lead_{int(k)}"] = cov[k]
+    out.index = out.index.astype(int)
+    out.index.name = "lead_day"
+    return out
