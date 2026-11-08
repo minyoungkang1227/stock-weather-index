@@ -1,0 +1,23 @@
+# 인증키 — 절대 올리지 않음
+.env
+# 수집 데이터·DB·결과물 (용량이 크고, 상업 데이터 재배포 문제가 있을 수 있음)
+data/raw/*
+!data/raw/kma/
+data/raw/kma/*
+!data/raw/kma/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/*.db
+output/*
+!output/.gitkeep
+models/*
+!models/.gitkeep
+logs_*.txt
+# 파이썬·도구
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+.vscode/
+.idea/
+.DS_Store
