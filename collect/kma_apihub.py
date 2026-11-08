@@ -127,11 +127,15 @@ def fetch_asos_daily(stations: list[int], start: str, end: str, key: str, cache_
         if ds in done:
             continue
         try:
-            df = asos_standard(parse_typ01(_get("kma_sfcdd.php", {"tm": ds, "stn": 0, "help": 0, "disp": 0}, key)))
+            # help=1 이어야 응답에 열 설명(# 1. TM : …)이 붙어 열 이름을 확정할 수 있음 (check_keys 와 같은 요청)
+            df = asos_standard(parse_typ01(_get("kma_sfcdd.php", {"tm": ds, "stn": 0, "help": 1}, key)))
             new.setdefault(day.year, []).append(df[df["stn"].isin(want)])
             time.sleep(sleep)
         except Exception as e:
             failed.append((ds, str(e)[:100]))
+            if len(failed) >= 10 and not any(new.values()) and not done:
+                # 처음부터 연속 실패 = 요청 형식·키 문제. 몇 시간 헛돌지 않도록 바로 멈춘다.
+                raise RuntimeError(f"처음 {len(failed)}일 모두 실패 — 중단합니다. 첫 오류: {failed[0][1]}")
         if day.is_year_end or day == days[-1]:
             got = sum(len(x) for x in new.get(day.year, []))
             if got or day.year in {int(f[0][:4]) for f in failed}:
