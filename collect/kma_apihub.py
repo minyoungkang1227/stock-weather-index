@@ -132,8 +132,12 @@ def fetch_asos_daily(stations: list[int], start: str, end: str, key: str, cache_
             time.sleep(sleep)
         except Exception as e:
             failed.append((ds, str(e)[:100]))
-        if cache_dir and day.is_year_end and new.get(day.year):
-            _save_year(cache_dir, day.year, by_year, new)
+        if day.is_year_end or day == days[-1]:
+            got = sum(len(x) for x in new.get(day.year, []))
+            if got or day.year in {int(f[0][:4]) for f in failed}:
+                print(f"  {day.year}년 받음: {got:,}행, 지금까지 실패 {len(failed)}일", flush=True)
+            if cache_dir and new.get(day.year):
+                _save_year(cache_dir, day.year, by_year, new)
     if cache_dir:
         for y in list(new):
             _save_year(cache_dir, y, by_year, new)

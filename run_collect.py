@@ -25,7 +25,8 @@ def save(df: pd.DataFrame, name: str) -> None:
 
 if "weather" in steps:
     print("[1] 기상 일자료")
-    if any(os.scandir(f"{C.RAW}/kma")) if os.path.isdir(f"{C.RAW}/kma") else False:
+    import glob
+    if glob.glob(f"{C.RAW}/kma/*.csv"):   # 폴더에 .gitkeep 같은 다른 파일만 있으면 해당 없음
         w = weather.read_kma_csv(f"{C.RAW}/kma/*.csv")
         print("  기상자료개방포털 CSV 사용")
     elif os.getenv("KMA_APIHUB_KEY"):
@@ -38,6 +39,8 @@ if "weather" in steps:
     else:
         w = None
         print("  건너뜀: data/raw/kma/ 에 CSV를 넣거나 .env 에 DATA_GO_KR_KEY 를 넣으세요.")
+    if w is not None and w.empty:
+        print("  [경고] 기상 자료가 0행입니다. 저장하지 않았습니다.")
     if w is not None and not w.empty:
         save(w, "weather_daily")
         print(quality.weather_missing(w).to_string(index=False))
