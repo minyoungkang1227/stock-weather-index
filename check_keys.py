@@ -47,7 +47,12 @@ def kma_asos():
     k = KEYS["KMA_APIHUB_KEY"]
     if not k:
         return show("API허브 관측(ASOS)", False, "키 없음")
-    d = kma_apihub.asos_standard(kma_apihub.parse_typ01(kma_apihub._get("kma_sfcdd.php", {"tm": "20240101", "stn": 108, "help": 1}, k)))
+    raw = kma_apihub._get("kma_sfcdd.php", {"tm": "20240101", "stn": 0, "help": 1}, k)
+    os.makedirs("data/raw", exist_ok=True)
+    with open("data/raw/check_asos_raw.txt", "w", encoding="utf-8") as f:   # 응답 원문(키 없음) — 형식 확인용
+        f.write(raw)
+    d = kma_apihub.asos_standard(kma_apihub.parse_typ01(raw))
+    d = d[d["stn"] == 108]
     r = d.iloc[0] if len(d) else None
     show("API허브 관측(ASOS)", r is not None and r["tavg"] == 3.3,
          "응답 0줄" if r is None else f"서울 2024-01-01 평균기온 {r['tavg']} (기대값 3.3)")

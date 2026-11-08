@@ -58,6 +58,10 @@ def parse_typ01(text: str) -> pd.DataFrame:
     cols = next((c for c in candidates if len(c) == n), None)
     if cols is None and len(numbered) == n:
         cols = numbered
+    if cols is None and 0 < len(numbered) < n:
+        # 설명보다 값이 많은 경우(예: 지점 하나만 요청했을 때 줄 끝에 값이 하나 더 붙음):
+        # 앞쪽 열은 설명 순서대로, 남는 뒤쪽 열은 EXTRA_ 로 둔다. 정렬이 맞는지는 호출하는 쪽에서 검증.
+        cols = numbered + [f"EXTRA_{i}" for i in range(1, n - len(numbered) + 1)]
     if cols is None:
         raise ValueError(f"열 이름을 확정할 수 없습니다 (데이터 {n}열, 설명 {len(numbered)}개). 응답 형식을 확인하세요.")
     return pd.DataFrame([r + [None] * (n - len(r)) for r in rows], columns=cols)
@@ -79,7 +83,18 @@ def _get(endpoint: str, params: dict, key: str) -> str:
 
 
 # ---------- ASOS 일자료 ----------
+def _check_asos_alignment(df: pd.DataFrame) -> None:
+    """열이 밀리지 않았는지 확인: 날짜 8자리, 지점번호 정수, 시각 열(시분)은 0~2400. 어긋나면 멈춘다."""
+    tm_ok = df["TM"].astype(str).str.fullmatch(r"\d{8}(\d{2,4})?").all()
+    stn_ok = df["STN"].astype(str).str.fullmatch(r"\d+").all()
+    hhmm = pd.concat([pd.Series(dtype=float)] + [_num(df[c]) for c in ("TA_MAX_TM", "TA_MIN_TM") if c in df]).dropna()
+    hhmm_ok = hhmm.between(0, 2400).all() and (hhmm % 100 < 60).all()
+    if not (tm_ok and stn_ok and hhmm_ok):
+        raise ValueError("ASOS 열 정렬이 맞지 않습니다 (날짜/지점/시각 열 검사 실패). 응답 원문을 확인하세요.")
+
+
 def asos_standard(df: pd.DataFrame) -> pd.DataFrame:
+    _check_asos_alignment(df)
     out = pd.DataFrame({
         "stn": pd.to_numeric(df["STN"], errors="coerce").astype("Int64"),
         "date": pd.to_datetime(df["TM"].astype(str).str[:8], format="%Y%m%d", errors="coerce"),

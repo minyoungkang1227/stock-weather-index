@@ -117,3 +117,13 @@ def test_forecast_skill_hand_calc():
     obs = pd.DataFrame({"stn": 108, "date": pd.to_datetime(["2024-01-05", "2024-01-06"]), "tavg": [4.0, 7.0]})
     sk = kma_apihub.forecast_skill(fc, obs).iloc[0]
     assert sk["n"] == 2 and abs(sk["bias"] - (-0.5)) < 1e-12 and abs(sk["mae"] - 1.5) < 1e-12   # 오차 +1, -2
+
+
+def test_apihub_extra_trailing_column_and_misalignment_guard():
+    """값이 설명보다 1개 많으면 뒤에 EXTRA_1 로 붙이고, 열이 밀린 경우는 멈춘다."""
+    head = "#START7777\n# 1. TM : a\n# 2. STN : b\n# 3. TA_AVG : c\n# 4. TA_MAX : d\n# 5. TA_MAX_TM : t\n# 6. TA_MIN : e\n# 7. RN_DAY : f\n"
+    d = kma_apihub.asos_standard(kma_apihub.parse_typ01(head + "20240101 108 3.3 7.3 1430 -0.3 0.0 =\n20240101 108 3.3 7.3 1430 -0.3 0.0 9\n#7777END"))
+    assert list(d["tavg"]) == [3.3, 3.3]
+    shifted = head + "20240101 3.3 108 7.3 1430 -0.3 0.0 9\n#7777END"   # STN 자리에 3.3 → 정렬 깨짐
+    with pytest.raises(ValueError):
+        kma_apihub.asos_standard(kma_apihub.parse_typ01(shifted))
