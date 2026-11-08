@@ -253,3 +253,14 @@ def test_perm_pvalue_matches_ols_and_detects_signal():
     assert abs(r["coef"] - ref["coef"].iloc[0]) < 1e-8
     assert r["p_perm"] == 1 / 200 and r["B_used"] == 199
     assert prereg.perm_pvalue(g, "y", ["x"], "x", [], -1, True, B=199, seed=1)["p_perm"] > 0.99
+
+
+def test_perm_pvalue_with_missing_outcome_rows():
+    """첫해 매출성장률이 없는(전년 자료 없음) 실제 형태: 순열이 건너뛰어지면 안 됨."""
+    rng = np.random.default_rng(4)
+    xs_year = {y: rng.normal(0, 1, 4) for y in range(2015, 2026)}
+    g = pd.DataFrame([dict(code=c, year=y, q=q, x=xs_year[y][q - 1],
+                           y=(np.nan if y == 2015 else 2 * xs_year[y][q - 1] + rng.normal(0, 0.05)))
+                      for c in ("A", "B") for y in range(2015, 2026) for q in (1, 2, 3, 4)])
+    r = prereg.perm_pvalue(g, "y", ["x"], "x", [], +1, True, B=99, seed=2)
+    assert r["B_used"] == 99 and r["p_perm"] == 1 / 100

@@ -95,7 +95,8 @@ def perm_pvalue(g: pd.DataFrame, y: str, xs: list[str], x_test: str, controls: l
     yv = d[y].to_numpy(float)
     b0 = _coef(yv, _design(d, cols, year_fe))
     # (기업, 연도, 분기) -> 날씨값. 순열 해의 같은 기업·분기 값을 가져옴 (없으면 그 순열은 건너뜀)
-    look = d.set_index(["code", "year", "q"])[xs]
+    # 날씨값 조회표는 y 결측으로 빠진 행까지 포함한 원래 패널에서 만든다 (날씨는 그 해에도 있으므로)
+    look = g.dropna(subset=xs).drop_duplicates(["code", "year", "q"]).set_index(["code", "year", "q"])[xs]
     rng = np.random.default_rng(seed)
     null = []
     for _ in range(B):
@@ -108,5 +109,7 @@ def perm_pvalue(g: pd.DataFrame, y: str, xs: list[str], x_test: str, controls: l
         dp[xs] = xv
         null.append(_coef(yv, _design(dp, cols, year_fe)))
     null = np.asarray(null)
+    if len(null) < 0.9 * B:
+        raise ValueError(f"순열 {B}회 중 {len(null)}회만 계산됨 — 날씨값이 빠진 해가 있습니다. 자료를 확인하세요.")
     p = (1 + np.sum(null * sign >= b0 * sign)) / (1 + len(null))
     return dict(coef=b0, p_perm=float(p), B_used=len(null), null_sd=float(null.std()) if len(null) else np.nan)
