@@ -64,3 +64,49 @@ def stage1_markdown(s1: pd.DataFrame, bh_q: float, min_t: float, prereg_date: st
             f"업종마다 미리 정한 검정 1개, 기대 부호 방향 단측 p → 4개 BH 보정. 통과 = q ≤ {bh_q}, |t| ≥ {min_t}, 부호 일치.",
             "이 표 밖의 회귀 결과는 탐색용이며 '효과 있음'의 근거로 쓰지 않습니다.", "",
             show.round(4).to_markdown(index=False), ""]
+
+
+# ---------- 연도 순열검정 (Driscoll-Kraay 대안) ----------
+def _design(d: pd.DataFrame, cols: list[str], year_fe: bool) -> np.ndarray:
+    parts = [d[cols].to_numpy(float),
+             pd.get_dummies(d["code"], drop_first=False).to_numpy(float),          # 기업 고정효과
+             pd.get_dummies(d["q"], drop_first=True).to_numpy(float)]              # 분기더미
+    if year_fe:
+        parts.append(pd.get_dummies(d["year"], drop_first=True).to_numpy(float))
+    return np.column_stack(parts)
+
+
+def _coef(yv: np.ndarray, X: np.ndarray) -> float:
+    return float(np.linalg.lstsq(X, yv, rcond=None)[0][0])
+
+
+def perm_pvalue(g: pd.DataFrame, y: str, xs: list[str], x_test: str, controls: list[str], sign: int,
+                year_fe: bool = True, B: int = 999, seed: int = 0) -> dict:
+    """날씨 변수(xs 전부)를 '연도 단위로 통째로' 다른 해의 값으로 바꿔 끼워 계수의 귀무분포를 만든다.
+
+    왜: 업종당 시점이 약 40분기·기업 4~6개뿐이라 Driscoll-Kraay 표준오차가 실제 변동보다 작게 나와
+    가짜 날씨로도 '유의'가 자주 나온다(귀무 시뮬레이션에서 t의 표준편차 1.6~1.9, 이론 1).
+    연도를 섞으면 그 해 안의 분기 패턴·지점 간 관계·기업 간 상관은 그대로 두고 '날씨와 실적의 시점 대응'만 끊는다.
+    p(단측) = (1 + #{부호 맞춘 순열 계수 >= 실제}) / (1 + B).
+    """
+    cols = [x_test] + [x for x in xs if x != x_test] + controls
+    d = g.dropna(subset=[y] + xs + controls).copy()
+    years = np.array(sorted(d["year"].unique()))
+    yv = d[y].to_numpy(float)
+    b0 = _coef(yv, _design(d, cols, year_fe))
+    # (기업, 연도, 분기) -> 날씨값. 순열 해의 같은 기업·분기 값을 가져옴 (없으면 그 순열은 건너뜀)
+    look = d.set_index(["code", "year", "q"])[xs]
+    rng = np.random.default_rng(seed)
+    null = []
+    for _ in range(B):
+        perm = dict(zip(years, rng.permutation(years)))
+        idx = pd.MultiIndex.from_arrays([d["code"], d["year"].map(perm), d["q"]])
+        xv = look.reindex(idx).to_numpy(float)
+        if np.isnan(xv).any():
+            continue
+        dp = d.copy()
+        dp[xs] = xv
+        null.append(_coef(yv, _design(dp, cols, year_fe)))
+    null = np.asarray(null)
+    p = (1 + np.sum(null * sign >= b0 * sign)) / (1 + len(null))
+    return dict(coef=b0, p_perm=float(p), B_used=len(null), null_sd=float(null.std()) if len(null) else np.nan)

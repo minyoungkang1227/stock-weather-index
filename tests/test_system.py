@@ -233,3 +233,23 @@ def test_prereg_stage2_only_passed_groups():
     assert s2["verdict"] == "통과" and s2["groups"] == ["gas"] and s2["months"] == 24
     none = prereg.stage2(d, [], C.PREREG_STAGE2, decision.long_short_within, decision.summarize, 30)
     assert none["verdict"] == "해당 없음"
+
+
+def test_perm_pvalue_matches_ols_and_detects_signal():
+    """순열검정의 실제 계수 = 패널 회귀(기업FE+분기·연도더미) 계수와 같아야 하고,
+    y = 2·x + 작은 잡음이면 p 가 최소값 근처, 부호를 반대로 기대하면 p ≈ 1."""
+    from core import regress
+    rng = np.random.default_rng(3)
+    rows = []
+    xs_year = {y: rng.normal(0, 1, 4) for y in range(2015, 2026)}
+    for code in ("A", "B", "C"):
+        for y in range(2015, 2026):
+            for q in (1, 2, 3, 4):
+                x = xs_year[y][q - 1]
+                rows.append(dict(code=code, year=y, q=q, x=x, y=2 * x + rng.normal(0, 0.05) + 0.1 * (code == "B")))
+    g = pd.DataFrame(rows)
+    ref = regress.panel_reg(g, "y", ["x"], [], year_dummies=True)
+    r = prereg.perm_pvalue(g, "y", ["x"], "x", [], +1, True, B=199, seed=1)
+    assert abs(r["coef"] - ref["coef"].iloc[0]) < 1e-8
+    assert r["p_perm"] == 1 / 200 and r["B_used"] == 199
+    assert prereg.perm_pvalue(g, "y", ["x"], "x", [], -1, True, B=199, seed=1)["p_perm"] > 0.99
