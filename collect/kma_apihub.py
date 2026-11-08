@@ -70,7 +70,8 @@ def _num(s: pd.Series) -> pd.Series:
 
 def _get(endpoint: str, params: dict, key: str) -> str:
     r = requests.get(f"{BASE}/{endpoint}", params={**params, "authKey": key}, timeout=60)
-    r.raise_for_status()
+    if r.status_code != 200:   # requests 의 기본 에러문에는 키가 든 URL이 찍히므로 직접 만든다
+        raise RuntimeError(f"{endpoint} HTTP {r.status_code}: {_decode(r.content)[:200].replace(key, '***')!r}")
     t = _decode(r.content)
     if "#START7777" not in t:
         raise RuntimeError(f"예상과 다른 응답: {t[:200]!r}")
