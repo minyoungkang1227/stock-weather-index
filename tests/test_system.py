@@ -127,3 +127,12 @@ def test_apihub_extra_trailing_column_and_misalignment_guard():
     shifted = head + "20240101 3.3 108 7.3 1430 -0.3 0.0 9\n#7777END"   # STN 자리에 3.3 → 정렬 깨짐
     with pytest.raises(ValueError):
         kma_apihub.asos_standard(kma_apihub.parse_typ01(shifted))
+
+
+def test_apihub_asos_comma_format_trailing_comma():
+    """실제 stn=0 응답은 쉼표 구분 + 줄 끝 쉼표 → 끝 빈칸을 버리면 정확히 56열."""
+    raw = kma_apihub.parse_typ01(open(os.path.join(FX, "kma_asos_comma_sample.txt"), encoding="utf-8").read())
+    assert raw.shape[1] == 56 and not any(c.startswith("EXTRA_") for c in raw.columns)
+    d = kma_apihub.asos_standard(raw).set_index("stn")
+    assert (d.loc[108, "tavg"], d.loc[108, "tmax"], d.loc[108, "tmin"], d.loc[108, "rain"]) == (3.3, 7.3, -0.3, 0.0)
+    assert (d.loc[112, "tavg"], d.loc[112, "tmax"], d.loc[112, "tmin"]) == (2.9, 5.2, 0.2)

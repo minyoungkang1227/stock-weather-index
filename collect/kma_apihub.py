@@ -42,7 +42,7 @@ def parse_typ01(text: str) -> pd.DataFrame:
         if not s or s.startswith("#"):
             continue
         parts = [p.strip() for p in s.split(",")] if "," in s else s.split()
-        if parts and parts[-1] == "=":
+        while parts and parts[-1] in ("=", ""):   # 줄 끝의 '=' 또는 끝 쉼표가 만드는 빈 칸 제거
             parts = parts[:-1]
         rows.append(parts)
     if not rows:
