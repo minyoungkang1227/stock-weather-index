@@ -139,7 +139,8 @@ def main(split_year: int = 2021) -> None:
         print(s1[["group", "x", "coef", "t", "p_one", "q_bh", "pass"]].round(3).to_string(index=False))
     gv = gas_volume_test(wq)
     go = gas_opinc_test(p)
-    write_report(res, oos, p, split_year, s1, gv, go)
+    fvr = forecast_value_test(w)
+    write_report(res, oos, p, split_year, s1, gv, go, fvr)
     print("완료: output/results.csv, output/oos.csv, output/report.md")
 
 
@@ -207,8 +208,30 @@ def gas_opinc_test(p: pd.DataFrame) -> dict | None:
     return out
 
 
+def forecast_value_test(w: pd.DataFrame) -> dict | None:
+    """추가 사전 등록(config.PREREG_FORECAST_VALUE): 관측+예보 vs 관측+평년, 분기 HDD 나우캐스트 정확도."""
+    from swi import forecast_value as fv
+    sp = C.PREREG_FORECAST_VALUE
+    fc = load("forecast_mid", dtype={"issued_at": str})
+    if fc is None:
+        print("[예보 가치 검증] 건너뜀: forecast_mid 없음 (run_collect.py forecast_hist)")
+        return None
+    e = fv.run(w, fc, list(C.STATIONS), sp["quarters"], sp["start"], sp["end"], C.BASE_TEMP, sp["issue_hour"])
+    v = fv.verdict(e, sp["alpha"])
+    prof = fv.by_days_left(e)
+    b = sp["vol_beta_per_100hdd"]
+    v["vol_rmse_A_pct"], v["vol_rmse_B_pct"] = 100 * b * v["rmse_A"] / 100, 100 * b * v["rmse_B"] / 100
+    pd.DataFrame([v]).to_csv(f"{C.OUTPUT}/prereg_forecast_value.csv", index=False, encoding="utf-8-sig")
+    prof.astype({"bucket": str}).to_csv(f"{C.OUTPUT}/forecast_value_by_days_left.csv", index=False, encoding="utf-8-sig")
+    print(f"[예보 가치 검증] 분기 HDD 오차(RMSE) 평년만 {v['rmse_A']:.1f} → 예보 포함 {v['rmse_B']:.1f}도일 "
+          f"({v['rmse_reduction']:.1%} 감소), {v['quarters_B_better']}/{v['n_quarters']}개 분기 개선, "
+          f"단측 p = {v['p_one']:.4f} → {'통과' if v['passed'] else '미통과'}")
+    v["profile"] = prof
+    return v
+
+
 def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None, gv=None,
-                 go=None) -> None:
+                 go=None, fvr=None) -> None:
     lines = ["# 날씨지수 분석 결과", "",
              f"- 기간 {C.ANALYSIS_START_YEAR}~{C.ANALYSIS_END_YEAR}, 기업 {p['code'].nunique()}개",
              "- 모형: 기업 고정효과 + 분기더미 (+연도더미 버전), Driscoll-Kraay 표준오차",
@@ -224,6 +247,14 @@ def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_ye
                   f"- 계수 {gv['coef']:.4f} (100도일당), DK t {gv['t_DK']:.2f}(참고), 연도 순열 단측 p = {gv['p_perm']:.3f}, "
                   f"n = {gv['n']} ({gv['regions']}개 지역, {gv['years']}) → **{'통과' if gv['pass'] else '미통과'}** (기준 p < 0.05)",
                   "- 1차 4개 업종이 모두 미통과한 뒤 추가한 검정입니다. 판매량 자료를 보기 전에 기준을 고정했습니다.", ""]
+    if fvr is not None:
+        pr = fvr["profile"].copy(); pr["bucket"] = pr["bucket"].astype(str)
+        lines += [f"## 추가 사전 등록 — 예보의 값어치 ({C.PREREG_FORECAST_VALUE['date']})", "",
+                  f"- 분기 HDD 나우캐스트 RMSE: 관측+평년 {fvr['rmse_A']:.1f} → 관측+예보 {fvr['rmse_B']:.1f}도일 "
+                  f"({fvr['rmse_reduction']:.1%} 감소), {fvr['quarters_B_better']}/{fvr['n_quarters']}개 분기에서 예보가 나음, "
+                  f"분기 단위 단측 p = {fvr['p_one']:.4f} → **{'통과' if fvr['passed'] else '미통과'}**",
+                  f"- 판매량 환산(100도일당 5.19%): 오차 {fvr['vol_rmse_A_pct']:.2f}%p → {fvr['vol_rmse_B_pct']:.2f}%p", "",
+                  "분기 남은 일수별:", "", pr.round(3).to_markdown(index=False), ""]
     if go is not None:
         lines += [f"## 추가 사전 등록 — 도시가스 5사 영업이익 ~ ΔHDD ({C.PREREG_GAS_OPINC['date']}, 판매량 통과 뒤 추가)", "",
                   f"- 계수 {go['coef']:.4f} (100도일당, 전년동기 매출 대비 영업이익 변화), DK t {go['t_DK']:.2f}(참고), "

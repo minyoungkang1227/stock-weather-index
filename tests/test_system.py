@@ -327,3 +327,32 @@ def test_volume_quality_flags_common_break_and_volatile_region():
             rows.append(dict(region=r, year=y, quarter=3, vol_g=g))
     chk = volume.volume_quality(pd.DataFrame(rows), ["A", "B", "C", "U"], 2015, 2024)
     assert list(chk["common_breaks"]) == [2023] and list(chk["volatile_regions"]) == ["U"]
+
+
+# ---------- 예보의 값어치 ----------
+def test_forecast_value_quarter_errors_hand_calc():
+    """4일짜리 '분기': 실제 HDD 10,10,10,10 (합 40), 평년 8,8,8,8. 둘째 날 06시 예보가 셋째·넷째 날을 9, 12로 예보.
+    as-of 1일: A=0+32 → -8, B=-8 / 2일: A=10+24=34 → -6, B=34-16+21=39 → -1 / 3일: -4,-4 / 4일: -2,-2"""
+    from swi import forecast_value as fv
+    days = pd.date_range("2020-01-01", periods=4)
+    e = fv.quarter_errors(pd.Series(10.0, index=days), pd.Series(8.0, index=days),
+                          {days[1]: pd.Series([9.0, 12.0], index=days[2:])})
+    assert e["err_A"].tolist() == [-8, -6, -4, -2] and e["err_B"].tolist() == [-8, -1, -4, -2]
+    assert e["n_fc"].tolist() == [0, 2, 0, 0] and e["days_left"].tolist() == [4, 3, 2, 1]
+
+
+def test_forecast_value_no_lookahead():
+    """평년은 그해 이전 자료만, 예보 편향은 그해 이전 발표분만: 그해·이후 값을 바꿔도 결과 불변."""
+    from swi import forecast_value as fv
+    idx = pd.date_range("1980-01-01", "2021-12-31")
+    h = pd.Series(5.0, index=idx)
+    days = pd.date_range("2020-01-01", "2020-03-31")
+    c1 = fv.climatology_hdd(h, 2020, days)
+    h2 = h.copy(); h2[h2.index.year >= 2020] = 99.0
+    assert (fv.climatology_hdd(h2, 2020, days) == c1).all() and (c1 == 5.0).all()
+    fc = pd.DataFrame({"issued_at": ["201901010600", "202001010600"], "stn": 108, "lead_day": [4, 4],
+                       "target_date": ["2019-01-05", "2020-01-05"], "tmin": [0.0, 0.0], "tmax": [2.0, 20.0]})
+    obs = pd.DataFrame({"stn": 108, "date": pd.to_datetime(["2019-01-05", "2020-01-05"]), "tavg": [0.0, 0.0]})
+    b = fv.lead_bias_by_year(fc, obs)
+    assert b[2020].loc[4] == 1.0           # 2019 오차(+1)만 반영, 2020 오차(+10)는 2020 보정에 안 씀
+    assert b[2021].loc[4] == 5.5
