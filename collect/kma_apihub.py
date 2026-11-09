@@ -128,8 +128,14 @@ def fetch_asos_daily(stations: list[int], start: str, end: str, key: str, cache_
             continue
         try:
             # help=1 이어야 응답에 열 설명(# 1. TM : …)이 붙어 열 이름을 확정할 수 있음 (check_keys 와 같은 요청)
-            df = asos_standard(parse_typ01(_get("kma_sfcdd.php", {"tm": ds, "stn": 0, "help": 1}, key)))
-            new.setdefault(day.year, []).append(df[df["stn"].isin(want)])
+            raw = parse_typ01(_get("kma_sfcdd.php", {"tm": ds, "stn": 0, "help": 1}, key))
+            # 정렬 검사는 우리 지점 행에만: 전국 100여 지점 중 다른 지점 한 줄이 깨져도 그날 전체를 버리지 않도록.
+            # (우리 지점 줄이 깨져 지점번호가 밀렸다면 여기서 빠지고 → 아래에서 '지점 누락'으로 드러남)
+            raw = raw[pd.to_numeric(raw["STN"], errors="coerce").isin(want)]
+            df = asos_standard(raw)
+            if df["stn"].nunique() < len(want):
+                failed.append((ds, f"지점 누락 {sorted(want - set(df['stn'].astype(int)))} (나머지 지점은 저장)"))
+            new.setdefault(day.year, []).append(df)
             time.sleep(sleep)
         except Exception as e:
             failed.append((ds, str(e)[:100]))

@@ -278,3 +278,17 @@ def test_prereg_stage1_perm_override():
         assert abs(s.loc[g, "q_bh"] - q) < 1e-12
     assert s.loc["gas", "pass"] and s.loc["retail", "pass"] and s.loc["beverage", "pass"] and not s.loc["apparel", "pass"]
     assert (s["method"] == "perm").all()   # t 가 0.1 이어도 순열 p 로 판정 (|t| 조건 없음)
+
+
+def test_asos_other_station_bad_row_does_not_drop_day():
+    """다른 지점(999) 한 줄이 깨져도 우리 지점(108·112)은 저장. 실제 1989-11-06 사례."""
+    raw = open(os.path.join(FX, "kma_asos_comma_sample.txt"), encoding="utf-8").read()
+    bad = "20240101,999,x,1,2,3,4,5,6,7,8,9,10,11,9999,13," + ",".join(["0"] * 40) + ",\n#7777END"
+    raw = raw.replace("#7777END", bad)
+    orig = kma_apihub._get
+    kma_apihub._get = lambda ep, p, key: raw.replace("20240101", p["tm"])
+    try:
+        out = kma_apihub.fetch_asos_daily([108, 112], "2024-01-01", "2024-01-01", "k", sleep=0)
+    finally:
+        kma_apihub._get = orig
+    assert sorted(out["stn"].astype(int)) == [108, 112] and out.set_index("stn").loc[108, "tavg"] == 3.3
