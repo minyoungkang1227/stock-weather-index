@@ -150,7 +150,23 @@ def gas_volume_test(wq: pd.DataFrame) -> dict | None:
         print(f"[판매량 검정] 건너뜀: {sp['file']} 없음")
         return None
     v = volume.read_kogas_wide(sp["file"])
-    d = volume.region_panel(volume.quarterly_volume_growth(v), wq, sp["region_stn"])
+    vg = volume.quarterly_volume_growth(v)
+    # 자료 점검: 날씨로 설명할 수 없는 충격이 있으면 검정하지 않고 멈춘다 (처리 방법은 사람이 정해 config 에 기록)
+    chk = volume.volume_quality(vg, list(sp["region_stn"]), sp["start_year"], sp["end_year"])
+    chk["q3_table"].round(3).to_csv(f"{C.OUTPUT}/gas_volume_q3_check.csv", encoding="utf-8-sig")
+    handled_y, handled_r = set(sp.get("exclude_years", [])), set(sp.get("exclude_regions", []))
+    left_y = {y: m for y, m in chk["common_breaks"].items() if y not in handled_y}
+    left_r = {r: s for r, s in chk["volatile_regions"].items() if r not in handled_r}
+    if left_y or left_r:
+        print("[판매량 검정] 멈춤 — 날씨와 무관한 3분기에 큰 변동이 있습니다 (output/gas_volume_q3_check.csv).")
+        for y, m in left_y.items():
+            print(f"  {y}년: 지역 중앙값 3분기 전년비 {m:+.0%} (여러 지역 동시) — 통계 기준 변경·가격 충격 의심")
+        for r, sd in left_r.items():
+            print(f"  {r}: 3분기 전년비 표준편차 {sd:.0%} — 난방 외 수요(산업·발전) 비중 의심")
+        print("  처리 방법을 정해 config.PREREG_GAS_VOLUME 의 exclude_years / exclude_regions 에 이유와 함께 적은 뒤 다시 실행하세요.")
+        return None
+    vg = vg[~vg["year"].isin(handled_y) & ~vg["region"].isin(handled_r)]
+    d = volume.region_panel(vg, wq, {r: s for r, s in sp["region_stn"].items() if r not in handled_r})
     d = d[(d["year"] >= sp["start_year"]) & (d["year"] <= sp["end_year"])].dropna(subset=["vol_g", "HDD_yoy_100"])
     d.to_csv(f"{C.PROCESSED}/gas_volume_panel.csv", index=False, encoding="utf-8-sig")
     ref = regress.panel_reg(d, "vol_g", ["HDD_yoy_100"], [], year_dummies=sp["year_fe"])

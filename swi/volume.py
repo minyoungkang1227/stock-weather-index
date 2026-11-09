@@ -80,3 +80,14 @@ def region_panel(vg: pd.DataFrame, wq: pd.DataFrame, region_stn: dict) -> pd.Dat
     d["HDD_yoy_100"] = d["HDD_yoy"] / 100
     d["code"] = d["region"]
     return d
+
+
+def volume_quality(vg: pd.DataFrame, regions: list[str], y0: int, y1: int, tol: float = 0.15) -> dict:
+    """판매량 자료 점검 — 날씨와 무관한 3분기(난방 없음) 전년비로 '날씨 밖의 충격'을 찾는다.
+    common_breaks: 여러 지역이 같은 해 3분기에 함께 tol 넘게 움직인 해 (통계 기준 변경·가격 충격 의심)
+    volatile_regions: 3분기 전년비 표준편차가 tol 을 넘는 지역 (산업·발전용 비중이 커서 난방 신호가 묻힘 의심)"""
+    q3 = vg[(vg["quarter"] == 3) & vg["region"].isin(regions) & vg["year"].between(y0, y1)]
+    t = q3.pivot_table(index="year", columns="region", values="vol_g")
+    med = t.median(axis=1)
+    return dict(q3_table=t, common_breaks={int(y): float(m) for y, m in med.items() if abs(m) > tol},
+                volatile_regions={r: float(sd) for r, sd in t.std().items() if sd > tol})

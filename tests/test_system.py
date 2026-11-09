@@ -314,3 +314,16 @@ def test_kogas_wide_to_quarterly_growth_hand_calc():
     assert abs(g.loc[("서울", 2016, 1), "vol_g"] - np.log(2)) < 1e-12
     assert ("부산", 2016, 1) not in g.index or np.isnan(g.loc[("부산", 2016, 1), "vol_g"])
     assert abs(g.loc[("부산", 2016, 2), "vol_g"]) < 1e-12
+
+
+def test_volume_quality_flags_common_break_and_volatile_region():
+    from swi import volume
+    rows = []
+    for r in ("A", "B", "C", "U"):
+        for y in range(2015, 2025):
+            g = -0.25 if y == 2023 else 0.01                 # 2023년 모든 지역 3분기 -25% (공통 충격)
+            if r == "U":
+                g = 0.5 if y % 2 else -0.5                  # U: 3분기가 ±50% 요동
+            rows.append(dict(region=r, year=y, quarter=3, vol_g=g))
+    chk = volume.volume_quality(pd.DataFrame(rows), ["A", "B", "C", "U"], 2015, 2024)
+    assert list(chk["common_breaks"]) == [2023] and list(chk["volatile_regions"]) == ["U"]
