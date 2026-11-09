@@ -43,3 +43,40 @@ def attach(fin_p: pd.DataFrame, vg: pd.DataFrame | None, region_map: dict, enabl
     f.loc[use_vol, "y_sens"] = f.loc[use_vol, "vol_g"]
     f.loc[use_vol, "y_src"] = "판매량"
     return f
+
+
+REGIONS_KR = ["서울", "인천", "경기", "부산", "대구", "광주", "대전", "울산", "세종", "강원", "충북", "충남",
+              "전북", "전남", "경북", "경남", "제주"]
+
+
+def read_kogas_wide(path: str) -> pd.DataFrame:
+    """공공데이터포털 '한국가스공사_월별 시도별 도시가스 판매현황'(15040819) CSV → region, ym, volume(천㎥).
+    원본은 '연월' 한 열 + 시도별 열(가로형). 인코딩은 cp949/utf-8 둘 다 시도."""
+    for enc in ("utf-8-sig", "cp949", "euc-kr"):
+        try:
+            raw = pd.read_csv(path, encoding=enc, thousands=",")
+            break
+        except UnicodeDecodeError:
+            continue
+    raw.columns = [str(c).strip() for c in raw.columns]
+    ym_col = next((c for c in raw.columns if "연월" in c or c.lower() in ("ym", "date")), raw.columns[0])
+    regions = [c for c in raw.columns if c in REGIONS_KR]
+    if len(regions) < 2:
+        raise ValueError(f"시도 열을 찾지 못했습니다: {list(raw.columns)[:20]}")
+    ym = raw[ym_col].astype(str).str.replace(r"[^0-9]", "", regex=True).str[:6]
+    if not ym.str.fullmatch(r"\d{6}").all():
+        raise ValueError(f"연월 형식이 예상과 다릅니다: {raw[ym_col].head(3).tolist()}")
+    long = raw[regions].assign(ym=ym.str[:4] + "-" + ym.str[4:]).melt(id_vars="ym", var_name="region", value_name="volume")
+    long["volume"] = pd.to_numeric(long["volume"], errors="coerce")
+    return long[["region", "ym", "volume"]]
+
+
+def region_panel(vg: pd.DataFrame, wq: pd.DataFrame, region_stn: dict) -> pd.DataFrame:
+    """지역×분기 판매량 성장률 + 그 지역 관측소의 전년동기 대비 HDD 변화 (회귀·순열검정용, code=지역)."""
+    w = wq[["stn", "year", "q", "HDD_yoy"]].copy()
+    w["stn"] = w["stn"].astype(str)
+    m = pd.DataFrame([dict(region=r, stn=str(s)) for r, s in region_stn.items()])
+    d = vg.rename(columns={"quarter": "q"}).merge(m, on="region").merge(w, on=["stn", "year", "q"], how="left")
+    d["HDD_yoy_100"] = d["HDD_yoy"] / 100
+    d["code"] = d["region"]
+    return d

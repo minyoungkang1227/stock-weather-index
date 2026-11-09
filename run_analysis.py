@@ -137,11 +137,35 @@ def main(split_year: int = 2021) -> None:
             s1 = prereg.stage1(res, C.PREREG_STAGE1, C.PREREG_STAGE1_BH_Q, C.PREREG_STAGE1_MIN_T)
         s1.to_csv(f"{C.OUTPUT}/prereg_stage1.csv", index=False, encoding="utf-8-sig")
         print(s1[["group", "x", "coef", "t", "p_one", "q_bh", "pass"]].round(3).to_string(index=False))
-    write_report(res, oos, p, split_year, s1)
+    gv = gas_volume_test(wq)
+    write_report(res, oos, p, split_year, s1, gv)
     print("완료: output/results.csv, output/oos.csv, output/report.md")
 
 
-def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None) -> None:
+def gas_volume_test(wq: pd.DataFrame) -> dict | None:
+    """추가 사전 등록(config.PREREG_GAS_VOLUME): 지역 도시가스 판매량 ~ ΔHDD, 연도 순열검정."""
+    from swi import volume
+    sp = C.PREREG_GAS_VOLUME
+    if not os.path.exists(sp["file"]):
+        print(f"[판매량 검정] 건너뜀: {sp['file']} 없음")
+        return None
+    v = volume.read_kogas_wide(sp["file"])
+    d = volume.region_panel(volume.quarterly_volume_growth(v), wq, sp["region_stn"])
+    d = d[(d["year"] >= sp["start_year"]) & (d["year"] <= sp["end_year"])].dropna(subset=["vol_g", "HDD_yoy_100"])
+    d.to_csv(f"{C.PROCESSED}/gas_volume_panel.csv", index=False, encoding="utf-8-sig")
+    ref = regress.panel_reg(d, "vol_g", ["HDD_yoy_100"], [], year_dummies=sp["year_fe"])
+    r = prereg.perm_pvalue(d, "vol_g", ["HDD_yoy_100"], "HDD_yoy_100", [], sp["sign"], sp["year_fe"],
+                           C.PREREG_PERM_B, C.PREREG_PERM_SEED)
+    out = dict(coef=r["coef"], t_DK=float(ref["t"].iloc[0]) if len(ref) else np.nan, p_perm=r["p_perm"],
+               n=len(d), regions=d["region"].nunique(), years=f"{d['year'].min()}~{d['year'].max()}")
+    out["pass"] = bool(out["p_perm"] < sp["alpha"] and np.sign(out["coef"]) == sp["sign"])
+    pd.DataFrame([out]).to_csv(f"{C.OUTPUT}/prereg_gas_volume.csv", index=False, encoding="utf-8-sig")
+    print(f"[판매량 검정] 계수 {out['coef']:.4f} (100도일당 로그성장률), 순열 p = {out['p_perm']:.3f}, "
+          f"n={out['n']} ({out['regions']}개 지역, {out['years']}) → {'통과' if out['pass'] else '미통과'}")
+    return out
+
+
+def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None, gv=None) -> None:
     lines = ["# 날씨지수 분석 결과", "",
              f"- 기간 {C.ANALYSIS_START_YEAR}~{C.ANALYSIS_END_YEAR}, 기업 {p['code'].nunique()}개",
              "- 모형: 기업 고정효과 + 분기더미 (+연도더미 버전), Driscoll-Kraay 표준오차",
@@ -152,6 +176,11 @@ def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_ye
                   + (" — 이번 실행은 SWI_INCLUDE_EXCLUDED=1 로 포함한 참고 버전" if len(C.FIRMS) == len(C.FIRMS_ALL) else ""), ""]
     if s1 is not None:
         lines += prereg.stage1_markdown(s1, C.PREREG_STAGE1_BH_Q, C.PREREG_STAGE1_MIN_T, C.PREREG_DATE)
+    if gv is not None:
+        lines += [f"## 추가 사전 등록 — 도시가스 판매량 ~ ΔHDD ({C.PREREG_GAS_VOLUME['date']}, 1차 미통과 뒤 추가)", "",
+                  f"- 계수 {gv['coef']:.4f} (100도일당), DK t {gv['t_DK']:.2f}(참고), 연도 순열 단측 p = {gv['p_perm']:.3f}, "
+                  f"n = {gv['n']} ({gv['regions']}개 지역, {gv['years']}) → **{'통과' if gv['pass'] else '미통과'}** (기준 p < 0.05)",
+                  "- 1차 4개 업종이 모두 미통과한 뒤 추가한 검정입니다. 판매량 자료를 보기 전에 기준을 고정했습니다.", ""]
         lines += ["## 탐색 결과 (판정에 쓰지 않음)", ""]
     if not res.empty:
         show = res[["group", "y", "x", "year_fe", "coef", "se", "t", "p", "p_bh", "nobs", "n_firms"]].round(4)

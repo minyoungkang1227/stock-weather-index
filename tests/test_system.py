@@ -292,3 +292,25 @@ def test_asos_other_station_bad_row_does_not_drop_day():
     finally:
         kma_apihub._get = orig
     assert sorted(out["stn"].astype(int)) == [108, 112] and out.set_index("stn").loc[108, "tavg"] == 3.3
+
+
+def test_kogas_wide_to_quarterly_growth_hand_calc():
+    """가스공사 가로형 CSV(cp949, 천단위 쉼표) → 분기 성장률. 서울 2015Q1 = 10+20+30 = 60, 2016Q1 = 20+40+60 = 120
+    → log(120/60) = log 2. 부산 2016Q1 은 3월이 비어 분기 계산 안 함."""
+    from swi import volume
+    rows = []
+    for y in (2015, 2016):
+        for mth in range(1, 13):
+            k = 2 if y == 2016 else 1
+            bs = "" if (y == 2016 and mth == 3) else "1,000"
+            rows.append(f"{y}-{mth:02d},{10 * mth * k},{bs}")
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "k.csv")
+        with open(path, "w", encoding="cp949") as f:
+            f.write("연월,서울,부산\n" + "\n".join(f'{r.split(",")[0]},{r.split(",")[1]},"{r.split(",", 2)[2]}"' for r in rows))
+        v = volume.read_kogas_wide(path)
+    assert set(v["region"]) == {"서울", "부산"} and v[(v.region == "부산") & (v.ym == "2015-01")]["volume"].iloc[0] == 1000
+    g = volume.quarterly_volume_growth(v).set_index(["region", "year", "quarter"])
+    assert abs(g.loc[("서울", 2016, 1), "vol_g"] - np.log(2)) < 1e-12
+    assert ("부산", 2016, 1) not in g.index or np.isnan(g.loc[("부산", 2016, 1), "vol_g"])
+    assert abs(g.loc[("부산", 2016, 2), "vol_g"]) < 1e-12

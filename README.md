@@ -79,6 +79,7 @@ tests/test_smoke.py  손계산 기대값 대조 테스트
 | 1차 (주 결과) | 업종마다 검정 1개: 가스 ΔHDD(+), 음료 ΔCDD(+), 의류·유통 4분기 Δ기온(−) → 매출 성장률. 기업FE+분기·연도더미 | 연도 순열검정(999회) 단측 p를 4개 업종에 BH 보정 q ≤ 0.10, 부호 일치 |
 | 2차 | 1차 통과 업종만으로 SWI 업종 내 롱숏(왕복 30bp 차감), 평가구간 | Newey-West t ≥ 2 |
 | 일본 자료 | 한국 유효 분기 < MIN_FIRM_OBS 인 업종에만 참고값으로 표시, 점수·판정에 안 섞음 | — |
+| 추가 (2026-11-09, 1차 미통과 뒤·자료 보기 전) | 8개 시도 도시가스 **판매량** 성장률 ~ 그 지역 ΔHDD, 지역FE+분기더미, 2015~2024 (가스공사 공공데이터 15040819 → `data/raw/kogas_citygas_monthly.csv`) | 연도 순열 단측 p < 0.05, 계수 > 0 |
 
 - 산출물: `output/prereg_stage1.csv`(run_analysis), `output/prereg_stage2.csv`(run_swi), 보고서 맨 위 '사전 등록 판정' 절.
 - 제외 종목을 포함한 참고 버전: `set SWI_INCLUDE_EXCLUDED=1` 후 실행.
