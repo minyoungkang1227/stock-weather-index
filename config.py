@@ -156,10 +156,12 @@ PREREG_SECTOR_VOLUME = {
         dict(name="전력 전체(월→분기) ~ 난방도일", src="power_monthly", item=["합계", "전체"], x="HDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=2, start=2000),
         dict(name="전력 주거용(연간) ~ 냉방도일", src="power_annual", item=["주거용"], x="CDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=None, start=1986),
         dict(name="전력 주거용(연간) ~ 난방도일", src="power_annual", item=["주거용"], x="HDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=None, start=1986),
-        dict(name="맥주 출하량 ~ 냉방도일", src="kosis", item=["맥주"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
-        dict(name="아이스크림 출하량 ~ 냉방도일", src="kosis", item=["아이스크림", "빙과"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
-        dict(name="탄산음료 출하량 ~ 냉방도일", src="kosis", item=["탄산음료", "청량음료"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
-        dict(name="에어컨 출하량 ~ 냉방도일", src="kosis", item=["에어컨", "공기조절", "공기조화"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        # 변경 (2026-11-09 13:25, 계산 전): KOSIS 품목별 통계의 공개 품목에 맥주·아이스크림·탄산음료·에어컨이 없음(사용자 확인)
+        #  → '시도/산업별 광공업생산지수(2020=100)'의 전국 산업별 출하지수(원지수, 물량 지수)로 대체. 품목보다 넓은 묶음이라 신호가 약해질 수 있음.
+        dict(name="알코올음료 출하지수 ~ 냉방도일", src="kosis", item=["알코올음료"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        dict(name="낙농제품·식용빙과 출하지수 ~ 냉방도일", src="kosis", item=["빙과", "낙농"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        dict(name="비알코올음료 출하지수 ~ 냉방도일", src="kosis", item=["비알코올", "비알콜"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        dict(name="가정용 기기 출하지수 ~ 냉방도일", src="kosis", item=["가정용 기기", "가정용기기"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
     ],
     "end_year": 2025, "bh_q": 0.10, "placebo_tol": {"power_monthly": 0.15, "kosis": 0.30},
     # 연간 주거용은 대조 분기가 없으므로 대신 '주거용 전년비가 30% 넘게 변한 해'가 있으면 멈춤
