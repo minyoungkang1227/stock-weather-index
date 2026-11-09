@@ -356,3 +356,25 @@ def test_forecast_value_no_lookahead():
     b = fv.lead_bias_by_year(fc, obs)
     assert b[2020].loc[4] == 1.0           # 2019 오차(+1)만 반영, 2020 오차(+10)는 2020 보정에 안 씀
     assert b[2021].loc[4] == 5.5
+
+
+# ---------- 업종 넓히기: 물량 자료 ----------
+def test_epsis_readers_and_growth_hand_calc():
+    """EPSIS 월별(가로형, cp949): 2001 1분기 = 1+2+3 = 6, 2000 1분기 = 0.5+1+1.5 = 3 → log2.
+    연간 용도별(머리글 3줄): 주거용 2001=200, 2000=100 → log2, 점유율 열은 버림."""
+    from swi import sector_volume as sv
+    with tempfile.TemporaryDirectory() as d:
+        p1 = os.path.join(d, "m.csv")
+        with open(p1, "w", encoding="cp949") as f:
+            f.write("연도," + ",".join(f"{k}월" for k in range(1, 13)) + "\n")
+            f.write("2001," + ",".join(str(float(k)) for k in range(1, 13)) + "\n")
+            f.write("2000," + ",".join(str(k / 2) for k in range(1, 13)) + "\n")
+        g = sv.quarterly_growth(sv.read_epsis_monthly(p1)).set_index(["year", "q"])
+        assert abs(g.loc[(2001, 1), "vol_g"] - np.log(2)) < 1e-12 and np.isnan(g.loc[(2000, 1), "vol_g"])
+        p2 = os.path.join(d, "a.csv")
+        with open(p2, "w", encoding="cp949") as f:
+            f.write("연도,주거용,,산업용,\n,주거용,점유율,제조업,\n,,,제조업,점유율\n2001,200,99,50,1\n2000,100,99,40,1\n")
+        a = sv.read_epsis_annual_by_use(p2)
+        assert set(a["item"]) == {"주거용", "제조업"}
+        ag = sv.annual_growth(a[a["item"] == "주거용"]).set_index("year")
+        assert abs(ag.loc[2001, "vol_g"] - np.log(2)) < 1e-12
