@@ -151,15 +151,21 @@ PREREG_SECTOR_VOLUME = {
     "date": "2026-11-09",
     "tests": [
         # (이름, 자료, 자료 안 품목/용도 이름 후보, 날씨 변수, 기대 부호, 대조 분기, 시작연도)
-        dict(name="전력 주택용 ~ 냉방도일", src="power", item=["주택용"], x="CDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=2, start=2000),
-        dict(name="전력 주택용 ~ 난방도일", src="power", item=["주택용"], x="HDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=2, start=2000),
+        # 변경 (2026-11-09 13:20, 계산 전): EPSIS 용도별은 연 단위만, 월별은 전체 합계만 제공 → 사용자 승인으로 둘 다 검정
+        dict(name="전력 전체(월→분기) ~ 냉방도일", src="power_monthly", item=["합계", "전체"], x="CDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=2, start=2000),
+        dict(name="전력 전체(월→분기) ~ 난방도일", src="power_monthly", item=["합계", "전체"], x="HDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=2, start=2000),
+        dict(name="전력 주거용(연간) ~ 냉방도일", src="power_annual", item=["주거용"], x="CDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=None, start=1986),
+        dict(name="전력 주거용(연간) ~ 난방도일", src="power_annual", item=["주거용"], x="HDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=None, start=1986),
         dict(name="맥주 출하량 ~ 냉방도일", src="kosis", item=["맥주"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
         dict(name="아이스크림 출하량 ~ 냉방도일", src="kosis", item=["아이스크림", "빙과"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
         dict(name="탄산음료 출하량 ~ 냉방도일", src="kosis", item=["탄산음료", "청량음료"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
         dict(name="에어컨 출하량 ~ 냉방도일", src="kosis", item=["에어컨", "공기조절", "공기조화"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
     ],
-    "end_year": 2025, "bh_q": 0.10, "placebo_tol": {"power": 0.15, "kosis": 0.30},
-    "files": {"power": "data/raw/epsis_power_monthly.csv", "kosis": "data/raw/kosis_items_monthly.csv"},
+    "end_year": 2025, "bh_q": 0.10, "placebo_tol": {"power_monthly": 0.15, "kosis": 0.30},
+    # 연간 주거용은 대조 분기가 없으므로 대신 '주거용 전년비가 30% 넘게 변한 해'가 있으면 멈춤
+    "annual_tol": 0.30,
+    "files": {"power_monthly": "data/raw/epsis_power_monthly.csv", "power_annual": "data/raw/epsis_power_by_use_annual.csv",
+              "kosis": "data/raw/kosis_items_monthly.csv"},
 }
 
 # 4) 일본 자료: 어떤 업종의 한국 유효 분기 수가 MIN_FIRM_OBS 미만이거나 β 추정이 불가할 때만 '참고값'으로 표시.
