@@ -136,6 +136,32 @@ PREREG_FORECAST_VALUE = {
     "alpha": 0.05, "issue_hour": "06", "vol_beta_per_100hdd": 0.0519,
 }
 
+# 3-5) 추가 사전 등록 (2026-11-09 13:20, 자료를 내려받기 전에 고정) — 업종 넓히기: 물량 자료로 날씨 영향 검정
+#    배경: 매출은 가격·제품구성에 가려 날씨 신호가 사라졌고(1차 실패), 가스는 '판매량'에서 뚜렷했다.
+#          같은 방식(가격이 섞이지 않은 물량)으로 음료(재검정)와 새 업종(전력·계절가전)을 본다.
+#    자료: 전력 = 전력통계정보시스템(EPSIS) 월별 판매전력량(용도별), 단위 MWh
+#          음료·가전 = KOSIS 광업제조업동향조사 '품목별 광공업 생산·출하·재고·내수·수출량'의 월별 출하량
+#    공통 모형: 분기 물량의 전년동기 대비 로그성장률 ~ 전국(6개 도시 평균) Δ날씨 + 분기더미. 연도 순열검정 999회 단측.
+#    판정: 아래 6개 검정을 한 묶음으로 BH 보정 q <= 0.10, 그리고 부호 일치.
+#    자료 점검(검정 전): 날씨 영향이 거의 없는 '대조 분기'의 전년비가 tol 을 넘는 해가 있으면 멈추고 처리 방법을 정한다
+#          (음료·가전은 1분기, 전력은 봄·가을인 2분기). 품목 이름이 자료에 없으면 그 검정은 '자료 없음'으로 보고(삭제 아님).
+#    한계(미리 적어 둠): 에어컨은 성수기 전(2분기)에 미리 출하하므로 같은 분기 날씨와의 관계가 약할 수 있다.
+#          전국 물량이라 특정 회사 실적이 아니다. 주가 연결은 이 검정 범위 밖.
+PREREG_SECTOR_VOLUME = {
+    "date": "2026-11-09",
+    "tests": [
+        # (이름, 자료, 자료 안 품목/용도 이름 후보, 날씨 변수, 기대 부호, 대조 분기, 시작연도)
+        dict(name="전력 주택용 ~ 냉방도일", src="power", item=["주택용"], x="CDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=2, start=2000),
+        dict(name="전력 주택용 ~ 난방도일", src="power", item=["주택용"], x="HDD_yoy_100", xs=["HDD_yoy_100", "CDD_yoy_100"], sign=+1, placebo_q=2, start=2000),
+        dict(name="맥주 출하량 ~ 냉방도일", src="kosis", item=["맥주"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        dict(name="아이스크림 출하량 ~ 냉방도일", src="kosis", item=["아이스크림", "빙과"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        dict(name="탄산음료 출하량 ~ 냉방도일", src="kosis", item=["탄산음료", "청량음료"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        dict(name="에어컨 출하량 ~ 냉방도일", src="kosis", item=["에어컨", "공기조절", "공기조화"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+    ],
+    "end_year": 2025, "bh_q": 0.10, "placebo_tol": {"power": 0.15, "kosis": 0.30},
+    "files": {"power": "data/raw/epsis_power_monthly.csv", "kosis": "data/raw/kosis_items_monthly.csv"},
+}
+
 # 4) 일본 자료: 어떤 업종의 한국 유효 분기 수가 MIN_FIRM_OBS 미만이거나 β 추정이 불가할 때만 '참고값'으로 표시.
 #    판정·점수 계산에는 섞지 않음. (2026-11 기준 4개 업종 모두 한국 자료로 추정 가능 → 미사용)
 JAPAN_FALLBACK = {"use_only_if_korean_obs_below": "MIN_FIRM_OBS", "affects_scores": False}
