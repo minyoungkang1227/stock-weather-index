@@ -138,7 +138,8 @@ def main(split_year: int = 2021) -> None:
         s1.to_csv(f"{C.OUTPUT}/prereg_stage1.csv", index=False, encoding="utf-8-sig")
         print(s1[["group", "x", "coef", "t", "p_one", "q_bh", "pass"]].round(3).to_string(index=False))
     gv = gas_volume_test(wq)
-    write_report(res, oos, p, split_year, s1, gv)
+    go = gas_opinc_test(p)
+    write_report(res, oos, p, split_year, s1, gv, go)
     print("완료: output/results.csv, output/oos.csv, output/report.md")
 
 
@@ -181,7 +182,33 @@ def gas_volume_test(wq: pd.DataFrame) -> dict | None:
     return out
 
 
-def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None, gv=None) -> None:
+def gas_opinc_test(p: pd.DataFrame) -> dict | None:
+    """추가 사전 등록(config.PREREG_GAS_OPINC): 도시가스 5사 영업이익 변화 ~ ΔHDD, 연도 순열검정."""
+    sp = C.PREREG_GAS_OPINC
+    d = p[p["code"].isin(sp["codes"])].copy()
+    if "HDD_yoy_100" not in d:
+        d["HDD_yoy_100"] = d["HDD_yoy"] / 100
+    d = d[(d["year"] >= sp["start_year"]) & (d["year"] <= sp["end_year"]) & ~d["year"].isin(sp["exclude_years"])]
+    # y 결측 행은 남겨 둔다: 순열 때 '다른 해의 날씨'를 찾아오려면 그 해 날씨값이 표에 있어야 함 (perm_pvalue 가 y 결측은 알아서 뺌)
+    d = d.dropna(subset=[sp["x"]])
+    if d.dropna(subset=[sp["y"]])["code"].nunique() < 2:
+        print("[영업이익 검정] 건너뜀: 자료 부족")
+        return None
+    ref = regress.panel_reg(d, sp["y"], [sp["x"]], [], year_dummies=sp["year_fe"])
+    r = prereg.perm_pvalue(d, sp["y"], [sp["x"]], sp["x"], [], sp["sign"], sp["year_fe"],
+                           C.PREREG_PERM_B, C.PREREG_PERM_SEED)
+    dd = d.dropna(subset=[sp["y"]])
+    out = dict(coef=r["coef"], t_DK=float(ref["t"].iloc[0]) if len(ref) else np.nan, p_perm=r["p_perm"],
+               n=len(dd), firms=dd["code"].nunique(), years=f"{dd['year'].min()}~{dd['year'].max()}")
+    out["pass"] = bool(out["p_perm"] < sp["alpha"] and np.sign(out["coef"]) == sp["sign"])
+    pd.DataFrame([out]).to_csv(f"{C.OUTPUT}/prereg_gas_opinc.csv", index=False, encoding="utf-8-sig")
+    print(f"[영업이익 검정] 계수 {out['coef']:.4f} (100도일당, 전년매출 대비 영업이익 변화), 순열 p = {out['p_perm']:.3f}, "
+          f"n={out['n']} ({out['firms']}개사, {out['years']}, 제외 {sp['exclude_years'] or '없음'}) → {'통과' if out['pass'] else '미통과'}")
+    return out
+
+
+def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None, gv=None,
+                 go=None) -> None:
     lines = ["# 날씨지수 분석 결과", "",
              f"- 기간 {C.ANALYSIS_START_YEAR}~{C.ANALYSIS_END_YEAR}, 기업 {p['code'].nunique()}개",
              "- 모형: 기업 고정효과 + 분기더미 (+연도더미 버전), Driscoll-Kraay 표준오차",
@@ -197,6 +224,11 @@ def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_ye
                   f"- 계수 {gv['coef']:.4f} (100도일당), DK t {gv['t_DK']:.2f}(참고), 연도 순열 단측 p = {gv['p_perm']:.3f}, "
                   f"n = {gv['n']} ({gv['regions']}개 지역, {gv['years']}) → **{'통과' if gv['pass'] else '미통과'}** (기준 p < 0.05)",
                   "- 1차 4개 업종이 모두 미통과한 뒤 추가한 검정입니다. 판매량 자료를 보기 전에 기준을 고정했습니다.", ""]
+    if go is not None:
+        lines += [f"## 추가 사전 등록 — 도시가스 5사 영업이익 ~ ΔHDD ({C.PREREG_GAS_OPINC['date']}, 판매량 통과 뒤 추가)", "",
+                  f"- 계수 {go['coef']:.4f} (100도일당, 전년동기 매출 대비 영업이익 변화), DK t {go['t_DK']:.2f}(참고), "
+                  f"연도 순열 단측 p = {go['p_perm']:.3f}, n = {go['n']} ({go['firms']}개사, {go['years']}, 제외 {C.PREREG_GAS_OPINC['exclude_years']}) "
+                  f"→ **{'통과' if go['pass'] else '미통과'}** (기준 p < 0.05)", ""]
         lines += ["## 탐색 결과 (판정에 쓰지 않음)", ""]
     if not res.empty:
         show = res[["group", "y", "x", "year_fe", "coef", "se", "t", "p", "p_bh", "nobs", "n_firms"]].round(4)
