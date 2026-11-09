@@ -98,7 +98,8 @@ if "disclosure" in steps:
             save(dd, "disclosures")
     else:
         print("  건너뜀: .env 에 DART_API_KEY 가 없습니다.")
-print("참고: 도시가스 판매량은 API 대신 직접 내려받아 data/raw/citygas_volume.csv 로 둡니다 (README 7-1).")
+if not os.path.exists(C.PREREG_GAS_VOLUME["file"]):
+    print(f"참고: 도시가스 판매량은 공공데이터포털 15040819(가스공사 월별 시도별 판매현황) CSV를 {C.PREREG_GAS_VOLUME['file']} 로 둡니다.")
 
 if "forecast_hist" in steps:
     print("[6] 중기 기온예보 이력 (기상청 API허브)")

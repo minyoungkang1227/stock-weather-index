@@ -184,7 +184,7 @@ SWI_WITHIN_GROUP = True
 DB_PATH = "data/swi.db"          # 이 파일이 있으면 분석 코드가 CSV 대신 DB에서 읽습니다
 MODEL_DIR = "models"
 # 공공데이터포털 '기상청_중기예보 조회서비스' 중기기온 예보구역 코드 (기온 예보 3~10일 뒤)
-# 코드가 맞지 않으면 수집 시 오류로 표시됩니다. 기상청 예보구역 코드표로 확인하세요.
+# 기상청 예보구역 목록(fct_medm_reg.php)과 대조 완료 — tests/test_system.py::test_forecast_region_codes_match_kma_list
 FORECAST_REG = {108: "11B10101", 112: "11B20201", 119: "11B20601", 133: "11C20401",
                 143: "11H10701", 152: "11H20101", 156: "11F20501", 159: "11H20201"}
 FORECAST_ERR_SD = 2.0            # 중기예보 일평균기온 오차 표준편차(℃) 가정 — 아래 모델 파일이 없을 때만 사용
