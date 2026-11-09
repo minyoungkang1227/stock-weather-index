@@ -111,6 +111,12 @@ with tab3:
         if x is not None:
             r = x.iloc[0]
             rows.append(dict(검정=label, 계수=r["coef"], p값=r["p_perm"], 판정="통과" if str(r["pass"]).lower() == "true" else "미통과"))
+    sv = out_csv("prereg_sector_volume")
+    if sv is not None:
+        for _, r in sv.iterrows():
+            rows.append(dict(검정=f"업종 물량: {r['name']}", 계수=r["coef"], p값=r["p_one"],
+                             판정=("자료 없음" if str(r.get("note", "")) == "자료 없음" else
+                                   "통과" if str(r["pass"]).lower() == "true" else "미통과")))
     fvx = out_csv("prereg_forecast_value")
     if fvx is not None:
         r = fvx.iloc[0]
