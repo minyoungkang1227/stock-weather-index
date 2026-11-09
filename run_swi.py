@@ -80,7 +80,12 @@ def prepare() -> dict:
     fmap = pd.DataFrame([dict(code=c, group=v[1], stn=str(v[2])) for c, v in C.FIRMS.items()])
     fin_p = fg.merge(fmap, on="code").merge(rq, on=["stn", "year", "quarter"], how="left")
     vraw = load("citygas_volume")
+    gvs = C.PREREG_GAS_VOLUME
+    if vraw is None and os.path.exists(gvs["file"]):          # 가스공사 시도별 판매현황(가로형)
+        vraw = volume.read_kogas_wide(gvs["file"])
     vg = volume.quarterly_volume_growth(vraw) if vraw is not None else None
+    if vg is not None:   # 판매량 검정과 같은 자료 처리: 날씨 밖 충격 연도·변동 큰 지역은 판매량을 쓰지 않음(→ 매출로 대체)
+        vg = vg[~vg["year"].isin(gvs.get("exclude_years", [])) & ~vg["region"].isin(gvs.get("exclude_regions", []))]
     fin_p = volume.attach(fin_p, vg, C.GAS_REGION, C.SWI_GAS_USE_VOLUME)
     return dict(w=w, fin=fin, px=px, mkt=mkt, e=e, fin_p=fin_p, get_sens=make_sens(fin_p),
                 mp=inputs.month_end_prices(px, mkt))
