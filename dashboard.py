@@ -29,7 +29,7 @@ st.title("Stock Weather Index")
 st.caption("날씨(관측·예보·평년) × 종목별 날씨 민감도 → 종목별 0~100 점수. 투자 권유가 아니며, 검증 탭의 결과와 함께 해석하세요.")
 
 if not os.path.exists(C.DB_PATH):
-    st.error(f"DB가 없습니다({C.DB_PATH}). `python swi_system.py init` → `backfill` 순서로 실행하세요.")
+    st.error(f"DB가 없습니다({C.DB_PATH}). `python swi_system.py init` → `load`(이미 수집했을 때) 또는 `backfill` 순서로 실행하세요.")
     st.stop()
 
 daily, runs = t("swi_daily"), t("runs")
@@ -59,8 +59,9 @@ with tab1:
                      .rename(columns={"name": "종목", "group": "업종", "B": "기상수혜도", "P": "상승확률", "C": "신뢰도",
                                       "obs_share": "분기 관측비율"}).round(1),
                      hide_index=True, width="stretch")
-        st.caption("기상수혜도 50 = 날씨 영향 없음. 신뢰도가 낮으면 종합 SWI는 50 쪽으로 당겨집니다. "
-                   "상승확률(P)의 근거는 검증 탭의 이벤트 스터디 판정을 먼저 확인하세요.")
+        st.caption("기상수혜도 50 = 날씨 영향 없음. 신뢰도가 낮으면 종합 SWI는 50 쪽으로 당겨집니다.")
+        st.warning("근거 범위: 실데이터 검증에서 확인된 것은 '날씨 → 도시가스 판매량'과 '예보가 분기 날씨 짐작을 개선'까지입니다. "
+                   "상승확률(P)과 이를 포함한 SWI 는 주가 근거가 확인되지 않았습니다 — 검증 탭 맨 위 '사전 등록 판정' 참고.")
 
 with tab2:
     if daily is None or daily.empty:
@@ -83,19 +84,58 @@ with tab2:
         st.write(f"이번 분기 예상 = {last['w_obs'] + last['w_fc'] + last['w_clim']:.1f}, "
                  f"작년 같은 분기 = {last['w_ly']:.1f}, 평년 = {last['w_norm']:.1f}")
         st.write(f"민감도(β) = {last['beta']:.4f} (표준오차 {last['beta_se']:.4f}), 예상 날씨 변화 = {last['dW']:.2f} "
-                 f"→ 날씨 수혜(매출 성장률 기여) = {100 * last['benefit']:.2f}%p")
+                 f"→ 날씨 수혜(민감도 결과변수 성장률 기여) = {100 * last['benefit']:.2f}%p")
         m = t("swi_monthly")
         if m is not None and "y_src" in m:
             src = m[m["code"] == code]["y_src"].dropna()
             if len(src):
                 st.caption(f"민감도 추정에 쓴 결과변수: {src.iloc[-1]}")
 
+def out_csv(name: str) -> pd.DataFrame | None:
+    f = os.path.join(C.OUTPUT, f"{name}.csv")
+    return pd.read_csv(f) if os.path.exists(f) else None
+
+
 with tab3:
+    st.subheader(f"사전 등록 판정 — 결과를 보기 전에 정한 기준 (등록 {C.PREREG_DATE})")
+    st.caption("p값은 모두 연도 순열검정 999회. 이 절이 결론이고, 아래 표들은 참고 자료입니다. 자세한 근거: docs/결론_말할수있는것_없는것.md")
+    rows = []
+    s1 = out_csv("prereg_stage1")
+    if s1 is not None:
+        for _, r in s1.iterrows():
+            rows.append(dict(검정=f"날씨 → 매출 ({GROUP_KO.get(r['group'], r['group'])}, {r['x']})", 계수=r["coef"],
+                             p값=r["p_one"], 판정="통과" if str(r["pass"]).lower() == "true" else "미통과"))
+    for name, label in (("prereg_gas_volume", "날씨 → 도시가스 판매량 (7개 시도)"),
+                        ("prereg_gas_opinc", "날씨 → 도시가스 5사 영업이익")):
+        x = out_csv(name)
+        if x is not None:
+            r = x.iloc[0]
+            rows.append(dict(검정=label, 계수=r["coef"], p값=r["p_perm"], 판정="통과" if str(r["pass"]).lower() == "true" else "미통과"))
+    fvx = out_csv("prereg_forecast_value")
+    if fvx is not None:
+        r = fvx.iloc[0]
+        rows.append(dict(검정=f"예보 → 분기 난방도일 짐작 (RMSE {r['rmse_A']:.1f}→{r['rmse_B']:.1f}도일)",
+                         계수=-r["rmse_reduction"], p값=r["p_one"], 판정="통과" if str(r["passed"]).lower() == "true" else "미통과"))
+    s2 = out_csv("prereg_stage2")
+    if s2 is not None:
+        rows.append(dict(검정="2차: SWI 업종 내 롱숏 (주가)", 계수=float("nan"), p값=float("nan"), 판정=str(s2.iloc[0]["verdict"])))
+    if rows:
+        st.dataframe(pd.DataFrame(rows).round(4), hide_index=True, width="stretch")
+    else:
+        st.info("`python run_analysis.py` 를 실행하면 판정이 표시됩니다.")
+    prof = out_csv("forecast_value_by_days_left")
+    if prof is not None:
+        st.caption("예보의 값어치 — 분기 남은 일수별 짐작 오차 감소율")
+        st.dataframe(prof.rename(columns={"bucket": "남은 일수", "rmse_A": "평년만", "rmse_B": "예보 포함", "reduction": "감소율"})
+                     .round(3), hide_index=True)
+
     es, ev, bt, bg = t("swi_event_study"), t("swi_model_eval"), t("swi_backtest"), t("swi_backtest_by_group")
     if es is None:
         st.info("월간 작업(`python swi_system.py monthly`)을 실행하면 검증 결과가 표시됩니다.")
     else:
         rid = es["run_id"].iloc[-1]
+        st.divider()
+        st.caption("아래는 참고 자료입니다. 1차(날씨→실적)를 통과한 업종이 없으므로 주가 관련 수치는 근거로 쓰지 않습니다.")
         st.subheader("날씨가 주가에 언제 반영되는가 (공시일 이벤트 스터디)")
         st.success(es[es["run_id"] == rid]["verdict"].iloc[0])
         st.dataframe(es[es["run_id"] == rid][["window", "n", "coef_pct", "t", "p"]].round(3), hide_index=True)
@@ -121,7 +161,7 @@ with tab4:
         st.write(f"주가 마지막 날짜: {p['date'].max()}")
     f = t("forecast_mid")
     if f is not None and len(f):
-        st.write(f"예보 스냅샷: {f['issued_at'].nunique()}회 발표분 저장 "
-                 f"({f['issued_at'].min()[:8]} ~ {f['issued_at'].max()[:8]}). 예보 기반 검증은 이력이 1년 이상 쌓인 뒤 가능합니다.")
+        iss = f["issued_at"].astype(str)
+        st.write(f"예보 이력: {iss.nunique():,}회 발표분 저장 ({iss.min()[:8]} ~ {iss.max()[:8]})")
     else:
         st.write("예보 스냅샷: 아직 없음")

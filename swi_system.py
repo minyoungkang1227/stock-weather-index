@@ -2,6 +2,7 @@
 
   python swi_system.py init        DB·폴더 만들기
   python swi_system.py backfill    전체 과거자료 수집(run_collect.py) → DB 적재 → 월간 작업 1회
+  python swi_system.py load        이미 받은 data/raw/*.csv 를 DB 에 적재 → 월간 작업 1회 (다시 수집하지 않음)
   python swi_system.py daily       [매일] 관측·주가·예보 갱신 → 품질 점검 → 오늘의 지수 → DB 저장
   python swi_system.py monthly     [매월 초] 실적·공시일 갱신 → 백테스트·모델 재학습 → 검증 결과 DB 저장
   python swi_system.py dashboard   대시보드 열기 (streamlit)
@@ -49,6 +50,19 @@ def cmd_backfill() -> None:
     except Exception as e:
         log_run("backfill", "error", f"{e}\n{traceback.format_exc()}", rid, t0)
         return
+    cmd_monthly(collect=False)
+
+
+def cmd_load() -> None:
+    """수집은 끝났을 때: data/raw 의 CSV 를 DB 로 옮기고 월간 작업(분석·백테스트·모델 저장)만 한 번."""
+    rid, t0 = uuid.uuid4().hex[:8], datetime.now().isoformat(timespec="seconds")
+    try:
+        n = db.ingest_raw(C.DB_PATH, C.RAW)
+        log_run("load", "ok", f"적재 {n}", rid, t0)
+        print(f"DB 적재: {n}")
+    except Exception as e:
+        log_run("load", "error", f"{e}\n{traceback.format_exc()}", rid, t0)
+        raise
     cmd_monthly(collect=False)
 
 
@@ -129,7 +143,7 @@ def cmd_monthly(collect: bool = True) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("job", choices=["init", "backfill", "daily", "monthly", "dashboard"])
+    ap.add_argument("job", choices=["init", "backfill", "load", "daily", "monthly", "dashboard"])
     ap.add_argument("--asof", default=None)
     a = ap.parse_args()
     os.makedirs(os.path.dirname(C.DB_PATH) or ".", exist_ok=True)
@@ -137,6 +151,8 @@ def main() -> None:
         cmd_init()
     elif a.job == "backfill":
         cmd_backfill()
+    elif a.job == "load":
+        cmd_load()
     elif a.job == "daily":
         asof = pd.Timestamp(a.asof) if a.asof else pd.Timestamp(datetime.now().date()) - pd.Timedelta(days=1)
         cmd_daily(asof)

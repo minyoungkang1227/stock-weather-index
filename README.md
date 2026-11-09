@@ -172,6 +172,7 @@ tests/test_smoke.py  손계산 기대값 대조 테스트
 pip install -r requirements.txt
 python swi_system.py init        # data/swi.db 생성
 python swi_system.py backfill    # 과거 전체 수집 → DB 적재 → 월간 작업(모델 학습)
+python swi_system.py load        # (이미 run_collect.py 로 받았으면) CSV → DB 적재 → 월간 작업, 다시 수집 안 함
 python swi_system.py daily       # 오늘의 지수 (기본: 어제 기준, --asof 2026-11-10 처럼 지정 가능)
 python swi_system.py dashboard   # 브라우저에서 대시보드 열림
 scripts\register_windows_tasks.bat   # 매일·매월 자동 실행 등록 (윈도우)
