@@ -94,3 +94,78 @@ def placebo_check(g: pd.DataFrame, q: int | None, tol: float, y0: int, y1: int) 
         sub = sub[sub["q"] == q]
     bad = sub[sub["vol_g"].abs() > tol]
     return {int(r.year): float(r.vol_g) for r in bad.itertuples()}
+
+
+def read_kosis_industry_index(path: str, item_word: str = "출하지수(원지수)", region: str = "전국") -> pd.DataFrame:
+    """KOSIS 시도/산업별 광공업생산지수 CSV(가로형: 시도별, 산업별, 항목, 단위, 'YYYY.MM 월'...) → item(산업), ym, volume.
+    원지수(계절조정 아님) 출하지수만 사용 — 계절조정값을 쓰면 전년동기 비교와 이중 처리가 된다."""
+    raw = _read(path)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    sub = raw[(raw["시도별"] == region) & (raw["항목"].astype(str).str.contains(item_word, regex=False))]
+    if sub.empty:
+        raise ValueError(f"'{region}' / '{item_word}' 행이 없습니다. 항목: {raw['항목'].unique()[:8]}")
+    tcols = [c for c in raw.columns if c[:4].isdigit() and "." in c[:7]]
+    long = sub.melt(id_vars="산업별", value_vars=tcols, var_name="t", value_name="volume")
+    long["ym"] = long["t"].str[:4] + "-" + long["t"].str[5:7]
+    long["volume"] = pd.to_numeric(long["volume"], errors="coerce")
+    return long.rename(columns={"산업별": "item"})[["item", "ym", "volume"]]
+
+
+def match_item(names, keys: list[str]):
+    """자료 안 이름 중 후보 단어와 맞는 것. 공백 무시, '그 단어로 시작'하는 이름을 우선
+    (예: '알코올음료'는 '비알코올 음료…'에도 들어 있으므로 시작 일치를 먼저 본다)."""
+    norm = {n: str(n).replace(" ", "") for n in names}
+    for k in keys:
+        kk = k.replace(" ", "")
+        hit = [n for n, v in norm.items() if v.startswith(kk)]
+        if hit:
+            return hit[0]
+    for k in keys:
+        kk = k.replace(" ", "")
+        hit = [n for n, v in norm.items() if kk in v]
+        if hit:
+            return hit[0]
+    return None
+
+
+def run_family(spec: dict, wq: pd.DataFrame, readers: dict, perm, B: int, seed: int) -> tuple[pd.DataFrame, list]:
+    """사전 등록 묶음 실행. 반환: (검정표, 자료 점검에서 걸린 목록). 걸린 것이 있으면 검정하지 않음(호출 쪽에서 멈춤)."""
+    from statsmodels.stats.multitest import multipletests
+    y1 = spec["end_year"]
+    w_q, w_a = national_weather(wq), national_weather(wq, annual=True)
+    rows, flags, cache = [], [], {}
+    for t in spec["tests"]:
+        src = t["src"]
+        if src not in cache:
+            cache[src] = readers[src]() if src in readers else None
+        v = cache[src]
+        name_match = None if v is None else match_item(v["item"].unique(), t["item"])
+        if v is None or name_match is None:
+            rows.append(dict(name=t["name"], item=None, n=0, coef=np.nan, p_one=np.nan, note="자료 없음"))
+            continue
+        vi = v[v["item"] == name_match]
+        annual = src == "power_annual"
+        g = annual_growth(vi) if annual else quarterly_growth(vi)
+        tol = spec["annual_tol"] if annual else spec["placebo_tol"][src]
+        bad = placebo_check(g, None if annual else t["placebo_q"], tol, t["start"], y1)
+        if bad:
+            flags.append((t["name"], name_match, bad))
+        d = g.merge(w_a if annual else w_q, on=["year", "q"], how="left").assign(code=name_match)
+        d = d[(d["year"] >= t["start"]) & (d["year"] <= y1)]
+        rows.append(dict(name=t["name"], item=name_match, n=int(d.dropna(subset=["vol_g"] + t["xs"]).shape[0]),
+                         _d=d, _t=t, note=""))
+    if flags:
+        return pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]), flags
+    for r in rows:
+        if "_d" in r:
+            t = r.pop("_t"); d = r.pop("_d")
+            res = perm(d, "vol_g", t["xs"], t["x"], [], t["sign"], False, B, seed)
+            r.update(coef=res["coef"], p_one=res["p_perm"])
+    out = pd.DataFrame(rows)
+    ok = out["p_one"].notna()
+    out["q_bh"] = np.nan
+    if ok.any():
+        out.loc[ok, "q_bh"] = multipletests(out.loc[ok, "p_one"], method="fdr_bh")[1]
+    signs = {t["name"]: t["sign"] for t in spec["tests"]}
+    out["pass"] = ok & (np.sign(out["coef"]) == out["name"].map(signs)) & (out["q_bh"] <= spec["bh_q"])
+    return out, []

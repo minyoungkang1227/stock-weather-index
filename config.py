@@ -167,7 +167,7 @@ PREREG_SECTOR_VOLUME = {
     # 연간 주거용은 대조 분기가 없으므로 대신 '주거용 전년비가 30% 넘게 변한 해'가 있으면 멈춤
     "annual_tol": 0.30,
     "files": {"power_monthly": "data/raw/epsis_power_monthly.csv", "power_annual": "data/raw/epsis_power_by_use_annual.csv",
-              "kosis": "data/raw/kosis_items_monthly.csv"},
+              "kosis": "data/raw/kosis_industry_index_monthly.csv"},
 }
 
 # 4) 일본 자료: 어떤 업종의 한국 유효 분기 수가 MIN_FIRM_OBS 미만이거나 β 추정이 불가할 때만 '참고값'으로 표시.

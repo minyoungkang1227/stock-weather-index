@@ -378,3 +378,20 @@ def test_epsis_readers_and_growth_hand_calc():
         assert set(a["item"]) == {"주거용", "제조업"}
         ag = sv.annual_growth(a[a["item"] == "주거용"]).set_index("year")
         assert abs(ag.loc[2001, "vol_g"] - np.log(2)) < 1e-12
+
+
+def test_kosis_reader_and_item_match():
+    from swi import sector_volume as sv
+    names = ["낙농제품 및 식용 빙과류 제조업", "비알코올 음료 및 얼음 제조업", "알코올 음료 제조업", "가정용 기기 제조업"]
+    assert sv.match_item(names, ["알코올음료"]) == "알코올 음료 제조업"      # '비알코올…'과 헷갈리지 않음
+    assert sv.match_item(names, ["비알코올"]) == "비알코올 음료 및 얼음 제조업"
+    assert sv.match_item(names, ["에어컨"]) is None
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "k.csv")
+        with open(p, "w", encoding="cp949") as f:
+            f.write('"시도별","산업별","항목","단위","2000.01 월","2000.02 월"\n'
+                    '"전국","알코올 음료 제조업","생산자제품 출하지수(원지수)","","90.5","80"\n'
+                    '"전국","알코올 음료 제조업","생산자제품 출하지수(계절조정)","","1","1"\n'
+                    '"서울","알코올 음료 제조업","생산자제품 출하지수(원지수)","","5","5"\n')
+        k = sv.read_kosis_industry_index(p)
+    assert k["ym"].tolist() == ["2000-01", "2000-02"] and k["volume"].tolist() == [90.5, 80.0]
