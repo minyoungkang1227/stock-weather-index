@@ -125,9 +125,18 @@ def main(split_year: int = 2021) -> None:
     oos.to_csv(f"{C.OUTPUT}/oos.csv", index=False, encoding="utf-8-sig")
     s1 = None
     if not res.empty:
-        s1 = prereg.stage1(res, C.PREREG_STAGE1, C.PREREG_STAGE1_BH_Q, C.PREREG_STAGE1_MIN_T)
+        if C.PREREG_STAGE1_METHOD == "perm":
+            pp = {}
+            for group, xs, ctrl in specs(p):
+                sp = C.PREREG_STAGE1.get(group)
+                if sp and sp["x"] in xs and group not in pp:
+                    pp[group] = prereg.perm_pvalue(p[p["group"] == group], sp["y"], list(xs), sp["x"], ctrl, sp["sign"],
+                                                   sp["year_fe"], C.PREREG_PERM_B, C.PREREG_PERM_SEED)["p_perm"]
+            s1 = prereg.stage1(res, C.PREREG_STAGE1, C.PREREG_STAGE1_BH_Q, None, p_override=pp)
+        else:
+            s1 = prereg.stage1(res, C.PREREG_STAGE1, C.PREREG_STAGE1_BH_Q, C.PREREG_STAGE1_MIN_T)
         s1.to_csv(f"{C.OUTPUT}/prereg_stage1.csv", index=False, encoding="utf-8-sig")
-        print(s1[["group", "x", "coef", "t", "q_bh", "pass"]].round(3).to_string(index=False))
+        print(s1[["group", "x", "coef", "t", "p_one", "q_bh", "pass"]].round(3).to_string(index=False))
     write_report(res, oos, p, split_year, s1)
     print("완료: output/results.csv, output/oos.csv, output/report.md")
 

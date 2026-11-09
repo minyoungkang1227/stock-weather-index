@@ -63,7 +63,7 @@ import os as _os
 FIRMS = FIRMS_ALL if _os.getenv("SWI_INCLUDE_EXCLUDED") == "1" else {c: v for c, v in FIRMS_ALL.items() if c not in EXCLUDED}
 
 # 2) 1차(주 결과): 업종별 날씨 → 매출 민감도. 업종마다 검정 하나만 미리 지정.
-#    모형: 기업 고정효과 + 분기더미 + 연도더미, Driscoll-Kraay 표준오차, 종속변수 = 매출 전년동기 대비 로그성장률
+#    모형: 기업 고정효과 + 분기더미 + 연도더미, 종속변수 = 매출 전년동기 대비 로그성장률, p값 = 연도 순열검정(아래)
 #    연도더미를 넣는 이유: 전국 날씨를 쓰는 업종은 모든 종목의 날씨값이 같아 사실상 시계열 회귀가 되므로,
 #    코로나 같은 연 단위 경기 충격과 날씨가 우연히 겹치는 것을 막기 위해 (대신 검정력은 낮아짐).
 #    부호: 가스 +(추운 겨울 → 매출↑), 음료 +(더운 여름 → 매출↑),
@@ -74,8 +74,14 @@ PREREG_STAGE1 = {
     "apparel":  {"y": "rev_g", "x": "TAVG_yoy_Q4", "year_fe": True, "sign": -1},
     "retail":   {"y": "rev_g", "x": "TAVG_yoy_Q4", "year_fe": True, "sign": -1},
 }
-PREREG_STAGE1_BH_Q = 0.10      # 4개 업종 단측 p값에 Benjamini-Hochberg 보정 후 이 값 이하
-PREREG_STAGE1_MIN_T = 2.0      # 그리고 |t| >= 2, 부호가 위와 같아야 통과
+PREREG_STAGE1_BH_Q = 0.10      # 4개 업종 단측 p값에 Benjamini-Hochberg 보정 후 이 값 이하 + 부호 일치
+# p값 계산: 연도 순열검정 (2026-11-09 변경, 실데이터 결과를 보기 전).
+#   변경 이유: 합성 날씨(효과 없음)로 점검하니 Driscoll-Kraay t 는 업종별 거짓양성 12~22%, '하나라도 통과' 35%.
+#   순열검정은 3~7%, 11%(명목 10%)로 맞음. 검정력 손실 7~8%p. 근거: tools/README_calibration.md
+PREREG_STAGE1_METHOD = "perm"  # "perm" = 순열검정 p 로 판정 / "DK" = 예전 방식(|t| >= PREREG_STAGE1_MIN_T 도 요구)
+PREREG_PERM_B = 999
+PREREG_PERM_SEED = 20261109
+PREREG_STAGE1_MIN_T = 2.0      # METHOD="DK" 일 때만 사용
 
 # 3) 2차: 1차를 통과한 업종만 모아 SWI 업종 내 롱숏(상위1/3-하위1/3, 왕복 30bp 차감) 월수익의
 #    '평가구간'(모델 선택 구간 이후) Newey-West t >= 2. 1차 실패 업종은 2차 결과를 효과로 해석하지 않음.

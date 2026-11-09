@@ -13,9 +13,11 @@ from scipy import stats
 from statsmodels.stats.multitest import multipletests
 
 
-def stage1(res: pd.DataFrame, spec: dict, bh_q: float = 0.10, min_t: float = 2.0) -> pd.DataFrame:
+def stage1(res: pd.DataFrame, spec: dict, bh_q: float = 0.10, min_t: float | None = 2.0,
+           p_override: dict | None = None) -> pd.DataFrame:
     """res: run_analysis 의 회귀표(group, y, x, year_fe, coef, se, t, p, nobs ...).
-    업종마다 사전 지정 검정 1개를 골라, 부호 방향 단측 p → 4개에 BH 보정 → 통과 여부."""
+    업종마다 사전 지정 검정 1개를 골라, 부호 방향 단측 p → 4개에 BH 보정 → 통과 여부.
+    p_override = {업종: 순열검정 단측 p} 를 주면 DK t 대신 그 p 를 쓴다 (min_t=None 이면 |t| 조건 없음)."""
     rows = []
     for g, sp in spec.items():
         r = res[(res["group"] == g) & (res["y"] == sp["y"]) & (res["x"] == sp["x"])
@@ -28,16 +30,18 @@ def stage1(res: pd.DataFrame, spec: dict, bh_q: float = 0.10, min_t: float = 2.0
         t = float(r["t"])
         # Driscoll-Kraay 는 시점 간 상관을 감안한 오차라 유효 표본은 '분기 수'에 가깝다 → 자유도 = 분기 수 - 1 (보수적)
         dof = max(int(r["n_periods"]) - 1, 1) if pd.notna(r.get("n_periods")) else 30
-        p_one = float(stats.t.sf(t * sp["sign"], dof))   # 기대 부호 방향 단측
+        p_dk = float(stats.t.sf(t * sp["sign"], dof))   # 기대 부호 방향 단측 (DK, 참고)
+        p_one = float(p_override[g]) if p_override is not None and g in p_override else p_dk
         rows.append(dict(group=g, **sp, coef=float(r["coef"]), se=float(r["se"]), t=t, nobs=r.get("nobs"),
-                         p_one=p_one, note=""))
+                         p_dk=p_dk, p_one=p_one, method="perm" if p_override is not None else "DK", note=""))
     out = pd.DataFrame(rows)
     ok = out["p_one"].notna()
     out["q_bh"] = np.nan
     if ok.any():
         out.loc[ok, "q_bh"] = multipletests(out.loc[ok, "p_one"].values, method="fdr_bh")[1]
-    out["sign_ok"] = np.sign(out["t"]) == out["sign"]
-    out["pass"] = ok & out["sign_ok"] & (out["t"].abs() >= min_t) & (out["q_bh"] <= bh_q)
+    out["sign_ok"] = np.sign(out["coef"]) == out["sign"]
+    t_ok = (out["t"].abs() >= min_t) if min_t is not None else True
+    out["pass"] = ok & out["sign_ok"] & t_ok & (out["q_bh"] <= bh_q)
     return out
 
 
@@ -59,9 +63,13 @@ def stage2(d_test: pd.DataFrame, passed_groups: list[str], spec: dict, long_shor
 
 
 def stage1_markdown(s1: pd.DataFrame, bh_q: float, min_t: float, prereg_date: str) -> list[str]:
-    show = s1[["group", "x", "sign", "coef", "t", "p_one", "q_bh", "sign_ok", "pass", "note"]].copy()
+    cols = [c for c in ["group", "x", "sign", "coef", "t", "p_dk", "p_one", "q_bh", "sign_ok", "pass", "note"] if c in s1]
+    show = s1[cols].copy()
+    perm = "method" in s1 and (s1["method"] == "perm").any()
+    rule = (f"통과 = 연도 순열검정 단측 p 의 BH q ≤ {bh_q}, 부호 일치. t·p_dk(Driscoll-Kraay)는 참고용"
+            if perm else f"통과 = q ≤ {bh_q}, |t| ≥ {min_t}, 부호 일치")
     return [f"## 사전 등록 판정 — 1차: 날씨 → 매출 (등록일 {prereg_date})", "",
-            f"업종마다 미리 정한 검정 1개, 기대 부호 방향 단측 p → 4개 BH 보정. 통과 = q ≤ {bh_q}, |t| ≥ {min_t}, 부호 일치.",
+            f"업종마다 미리 정한 검정 1개, 기대 부호 방향 단측 p → 4개 BH 보정. {rule}.",
             "이 표 밖의 회귀 결과는 탐색용이며 '효과 있음'의 근거로 쓰지 않습니다.", "",
             show.round(4).to_markdown(index=False), ""]
 

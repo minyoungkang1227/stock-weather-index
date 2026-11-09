@@ -264,3 +264,17 @@ def test_perm_pvalue_with_missing_outcome_rows():
                       for c in ("A", "B") for y in range(2015, 2026) for q in (1, 2, 3, 4)])
     r = prereg.perm_pvalue(g, "y", ["x"], "x", [], +1, True, B=99, seed=2)
     assert r["B_used"] == 99 and r["p_perm"] == 1 / 100
+
+
+def test_prereg_stage1_perm_override():
+    """순열 p 를 주면 그 p 로 BH: p = gas .01, beverage .04, apparel .30, retail .02
+    정렬 gas(1) retail(2) beverage(3) apparel(4) → q = .04, .04, .0533, .30 → gas·retail·beverage 통과(부호 맞을 때)."""
+    spec = C.PREREG_STAGE1
+    res = pd.DataFrame([dict(group=g, y=sp["y"], x=sp["x"], year_fe=True, coef=0.1 * sp["sign"], se=1.0,
+                             t=0.1 * sp["sign"], p=0.9, nobs=100, n_periods=40) for g, sp in spec.items()])
+    pp = {"gas": 0.01, "beverage": 0.04, "apparel": 0.30, "retail": 0.02}
+    s = prereg.stage1(res, spec, 0.10, None, p_override=pp).set_index("group")
+    for g, q in [("gas", 0.04), ("retail", 0.04), ("beverage", 0.04 * 4 / 3), ("apparel", 0.30)]:
+        assert abs(s.loc[g, "q_bh"] - q) < 1e-12
+    assert s.loc["gas", "pass"] and s.loc["retail", "pass"] and s.loc["beverage", "pass"] and not s.loc["apparel", "pass"]
+    assert (s["method"] == "perm").all()   # t 가 0.1 이어도 순열 p 로 판정 (|t| 조건 없음)
