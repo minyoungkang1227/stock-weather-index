@@ -140,7 +140,8 @@ def main(split_year: int = 2021) -> None:
     gv = gas_volume_test(wq)
     go = gas_opinc_test(p)
     fvr = forecast_value_test(w)
-    write_report(res, oos, p, split_year, s1, gv, go, fvr)
+    sec = sector_volume_test(wq)
+    write_report(res, oos, p, split_year, s1, gv, go, fvr, sec)
     print("완료: output/results.csv, output/oos.csv, output/report.md")
 
 
@@ -230,8 +231,33 @@ def forecast_value_test(w: pd.DataFrame) -> dict | None:
     return v
 
 
+def sector_volume_test(wq: pd.DataFrame) -> pd.DataFrame | None:
+    """추가 사전 등록(config.PREREG_SECTOR_VOLUME): 전력·음료·빙과·가전 물량 ~ 전국 날씨, 8개 묶음 BH."""
+    from swi import sector_volume as sv
+    sp = C.PREREG_SECTOR_VOLUME
+    f = sp["files"]
+    readers = {"power_monthly": lambda: sv.read_epsis_monthly(f["power_monthly"]),
+               "power_annual": lambda: sv.read_epsis_annual_by_use(f["power_annual"]),
+               "kosis": lambda: sv.read_kosis_industry_index(f["kosis"])}
+    readers = {k: r for k, r in readers.items() if os.path.exists(f[k])}
+    if not readers:
+        print("[업종 물량 검정] 건너뜀: 자료 파일 없음")
+        return None
+    out, flags = sv.run_family(sp, wq, readers, prereg.perm_pvalue, C.PREREG_PERM_B, C.PREREG_PERM_SEED)
+    if flags:
+        print("[업종 물량 검정] 멈춤 — 날씨와 무관한 대조 분기에 큰 변동:")
+        for name, item, bad in flags:
+            print(f"  {name} ({item}): " + ", ".join(f"{y}년 {v:+.0%}" for y, v in bad.items()))
+        print("  처리 방법을 정해 config.PREREG_SECTOR_VOLUME 해당 검정에 exclude_years 와 이유를 적은 뒤 다시 실행하세요.")
+        return None
+    out.to_csv(f"{C.OUTPUT}/prereg_sector_volume.csv", index=False, encoding="utf-8-sig")
+    print("[업종 물량 검정] 8개 묶음 (BH q<=0.10 + 부호)")
+    print(out[["name", "n", "coef", "p_one", "q_bh", "pass"]].round(4).to_string(index=False))
+    return out
+
+
 def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None, gv=None,
-                 go=None, fvr=None) -> None:
+                 go=None, fvr=None, sec=None) -> None:
     lines = ["# 날씨지수 분석 결과", "",
              f"- 기간 {C.ANALYSIS_START_YEAR}~{C.ANALYSIS_END_YEAR}, 기업 {p['code'].nunique()}개",
              "- 모형: 기업 고정효과 + 분기더미 (+연도더미 버전), Driscoll-Kraay 표준오차",
@@ -247,6 +273,9 @@ def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_ye
                   f"- 계수 {gv['coef']:.4f} (100도일당), DK t {gv['t_DK']:.2f}(참고), 연도 순열 단측 p = {gv['p_perm']:.3f}, "
                   f"n = {gv['n']} ({gv['regions']}개 지역, {gv['years']}) → **{'통과' if gv['pass'] else '미통과'}** (기준 p < 0.05)",
                   "- 1차 4개 업종이 모두 미통과한 뒤 추가한 검정입니다. 판매량 자료를 보기 전에 기준을 고정했습니다.", ""]
+    if sec is not None:
+        lines += [f"## 추가 사전 등록 — 업종 넓히기: 물량 ~ 날씨 ({C.PREREG_SECTOR_VOLUME['date']}, 8개 묶음 BH q ≤ 0.10)", "",
+                  sec[["name", "item", "n", "coef", "p_one", "q_bh", "pass", "note"]].round(4).to_markdown(index=False), ""]
     if fvr is not None:
         pr = fvr["profile"].copy(); pr["bucket"] = pr["bucket"].astype(str)
         lines += [f"## 추가 사전 등록 — 예보의 값어치 ({C.PREREG_FORECAST_VALUE['date']})", "",

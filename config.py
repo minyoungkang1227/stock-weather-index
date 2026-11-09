@@ -161,7 +161,9 @@ PREREG_SECTOR_VOLUME = {
         dict(name="알코올음료 출하지수 ~ 냉방도일", src="kosis", item=["알코올음료"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
         dict(name="낙농제품·식용빙과 출하지수 ~ 냉방도일", src="kosis", item=["빙과", "낙농"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
         dict(name="비알코올음료 출하지수 ~ 냉방도일", src="kosis", item=["비알코올", "비알콜"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
-        dict(name="가정용 기기 출하지수 ~ 냉방도일", src="kosis", item=["가정용 기기", "가정용기기"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000),
+        # 자료 점검 처리 (2026-11-09 13:35, 검정 결과 보기 전, 사용자 승인): 2002년 1분기 전년비 +33% (기준 30%) → 2002년 제외
+        dict(name="가정용 기기 출하지수 ~ 냉방도일", src="kosis", item=["가정용 기기", "가정용기기"], x="CDD_yoy_100", xs=["CDD_yoy_100"], sign=+1, placebo_q=1, start=2000,
+             exclude_years=[2002]),
     ],
     "end_year": 2025, "bh_q": 0.10, "placebo_tol": {"power_monthly": 0.15, "kosis": 0.30},
     # 연간 주거용은 대조 분기가 없으므로 대신 '주거용 전년비가 30% 넘게 변한 해'가 있으면 멈춤

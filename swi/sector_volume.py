@@ -146,6 +146,7 @@ def run_family(spec: dict, wq: pd.DataFrame, readers: dict, perm, B: int, seed: 
         vi = v[v["item"] == name_match]
         annual = src == "power_annual"
         g = annual_growth(vi) if annual else quarterly_growth(vi)
+        g = g[~g["year"].isin(t.get("exclude_years", []))]     # 자료 점검 뒤 사람이 정한 제외 연도 (config 에 이유 기록)
         tol = spec["annual_tol"] if annual else spec["placebo_tol"][src]
         bad = placebo_check(g, None if annual else t["placebo_q"], tol, t["start"], y1)
         if bad:
