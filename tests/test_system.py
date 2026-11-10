@@ -424,3 +424,41 @@ def test_nowcast_oos_fit_predict_and_evaluate_hand_calc():
     res = te.assign(pred_hat=r["pred_hat"], pred0=r["pred0"], pred_real=r["pred_real"])
     summ, v = no.evaluate({"x": pd.concat([res, res.assign(year=2022)])})
     assert abs(summ.iloc[0]["mse_reduction"] - 0.0) < 1e-12      # 오차 1 vs −1 → 제곱오차 같음
+
+
+def test_snapshot_export_keeps_only_results_and_stops_on_halted_daily():
+    """공개 스냅샷: 최신 기준일 행만, 공개 열만, 주가·로그는 없음. 마지막 daily 가 멈췄으면 아무것도 쓰지 않는다."""
+    import json
+    from system import snapshot
+    with tempfile.TemporaryDirectory() as d:
+        dbp, out, snap = os.path.join(d, "t.db"), os.path.join(d, "out"), os.path.join(d, "snap")
+        os.makedirs(out)
+        for f in snapshot.RESULT_FILES:
+            pd.DataFrame({"coef": [0.05], "pass": [True]}).to_csv(os.path.join(out, f"{f}.csv"), index=False)
+        base = dict(year=2026, quarter=4, obs_share=0.5, n_obs=46, n_fc=10, n_clim=36, HDD_exp=900.0, HDD_sd=50.0,
+                    HDD_ly=850.0, HDD_norm=920.0, CDD_exp=1.0, CDD_sd=0.5, CDD_ly=2.0, CDD_norm=1.5, run_id="r")
+        nc = pd.DataFrame([dict(base, asof="2026-11-08", stn="108", HDD_exp=111.0),
+                           dict(base, asof="2026-11-09", stn="108"), dict(base, asof="2026-11-09", stn="NATIONAL")])
+        db.upsert(dbp, "nowcast_daily", nc)
+        db.upsert(dbp, "prices", pd.DataFrame({"code": ["017390"], "date": ["2026-11-09"], "close": [1.0]}))
+        db.upsert(dbp, "runs", pd.DataFrame([dict(run_id="a", job="daily", status="ok", message="비밀 아님",
+                                                   started="2026-11-10T09:00:00", finished="2026-11-10T09:01:00",
+                                                   asof="2026-11-09")]))
+        meta = snapshot.export(dbp, out, snap)
+        assert meta["asof"] == "2026-11-09" and meta["last_daily"]["status"] == "ok"
+        got = pd.read_csv(os.path.join(snap, "nowcast_latest.csv"), dtype={"stn": str})
+        assert sorted(got["stn"]) == ["108", "NATIONAL"]           # 11-08 행은 빠짐
+        assert float(got.loc[got["stn"] == "108", "HDD_exp"].iloc[0]) == 900.0
+        assert "run_id" not in got.columns
+        files = sorted(os.listdir(snap))
+        assert files == sorted([f"{f}.csv" for f in snapshot.RESULT_FILES] + ["nowcast_latest.csv", "meta.json"])
+        assert "비밀" not in json.dumps(json.load(open(os.path.join(snap, "meta.json"), encoding="utf-8")), ensure_ascii=False)
+
+        # 마지막 daily 가 halted → 중단, 새 폴더에는 아무것도 생기지 않음
+        db.upsert(dbp, "runs", pd.DataFrame([dict(run_id="b", job="daily", status="halted", message="품질",
+                                                   started="2026-11-11T09:00:00", finished="2026-11-11T09:01:00",
+                                                   asof="2026-11-10")]))
+        snap2 = os.path.join(d, "snap2")
+        with pytest.raises(snapshot.SnapshotError):
+            snapshot.export(dbp, out, snap2)
+        assert not os.path.exists(snap2)

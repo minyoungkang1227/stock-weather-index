@@ -6,6 +6,7 @@
   python swi_system.py daily       [매일] 관측·주가·예보 갱신 → 품질 점검 → 오늘의 지수 → DB 저장
   python swi_system.py monthly     [매월 초] 실적·공시일 갱신 → 백테스트·모델 재학습 → 검증 결과 DB 저장
   python swi_system.py dashboard   대시보드 열기 (streamlit)
+  python swi_system.py publish     공개 웹용 결과 스냅샷(public_snapshot/) 만들기 — 원자료·주가는 넣지 않음
   옵션: --asof YYYY-MM-DD (daily를 특정 날짜 기준으로)
 """
 from __future__ import annotations
@@ -141,9 +142,19 @@ def cmd_monthly(collect: bool = True) -> None:
         log_run("monthly", "error", f"{e}\n{traceback.format_exc()}", rid, t0)
 
 
+def cmd_publish() -> None:
+    from system import snapshot
+    try:
+        meta = snapshot.export(C.DB_PATH, C.OUTPUT)
+    except snapshot.SnapshotError as e:
+        print(f"[publish] 중단: {e}")
+        sys.exit(1)
+    print(f"[publish] ok: {meta['asof']} 기준 스냅샷 → {snapshot.SNAP_DIR}/ (GitHub에 올리면 공개 웹에 반영)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("job", choices=["init", "backfill", "load", "daily", "monthly", "dashboard"])
+    ap.add_argument("job", choices=["init", "backfill", "load", "daily", "monthly", "dashboard", "publish"])
     ap.add_argument("--asof", default=None)
     a = ap.parse_args()
     os.makedirs(os.path.dirname(C.DB_PATH) or ".", exist_ok=True)
@@ -158,6 +169,8 @@ def main() -> None:
         cmd_daily(asof)
     elif a.job == "monthly":
         cmd_monthly()
+    elif a.job == "publish":
+        cmd_publish()
     else:
         subprocess.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
 
