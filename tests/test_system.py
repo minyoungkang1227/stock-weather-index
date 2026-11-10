@@ -395,3 +395,32 @@ def test_kosis_reader_and_item_match():
                     '"서울","알코올 음료 제조업","생산자제품 출하지수(원지수)","","5","5"\n')
         k = sv.read_kosis_industry_index(p)
     assert k["ym"].tolist() == ["2000-01", "2000-02"] and k["volume"].tolist() == [90.5, 80.0]
+
+
+# ---------- 표본외 나우캐스트 ----------
+def test_nowcast_oos_quarter_hand_calc():
+    """1990~2019 매일 HDD 10, 2020년은 12. 2020Q1(91일), 분기말 30일 전 = 3/1 → 관측 1/1~2/29(60일)×12 + 평년 31일×10 = 1030.
+    3/1 발표 예보가 3/1~3/8(8일) HDD 15 → 1030 − 8×10 + 8×15 = 1070. 실제 = 91×12 = 1092."""
+    from swi import nowcast_oos as no
+    idx = pd.date_range("1990-01-01", "2020-12-31")
+    dd = pd.DataFrame({"HDD": np.where(idx.year == 2020, 12.0, 10.0), "CDD": 0.0}, index=idx)
+    q = pd.Period("2020Q1", freq="Q")
+    r = no.quarter_nowcast(dd, q, {}, 30)
+    assert r["HDD"] == 1092 and abs(r["HDD_hat"] - 1030) < 1e-9 and r["asof"] == pd.Timestamp("2020-03-01")
+    f = pd.DataFrame({"HDD": 15.0, "CDD": 0.0}, index=pd.date_range("2020-03-01", "2020-03-08"))
+    r2 = no.quarter_nowcast(dd, q, {pd.Timestamp("2020-03-01"): f}, 30)
+    assert abs(r2["HDD_hat"] - 1070) < 1e-9
+
+
+def test_nowcast_oos_fit_predict_and_evaluate_hand_calc():
+    """학습 y = 1 + 2·HDD (분기 하나). 검증: 실제 ΔHDD 1, 짐작 0.5, 실제 y 3
+    → 실제날씨 예상 3(오차 0), 짐작 예상 2(오차 1), 날씨 없음 = 학습 평균 4(오차 −1)."""
+    from swi import nowcast_oos as no
+    tr = pd.DataFrame({"q": 1, "HDD": [0.0, 1.0, 2.0, 3.0]}).assign(y=lambda d: 1 + 2 * d["HDD"])
+    te = pd.DataFrame({"year": [2021], "q": [1], "HDD": [1.0], "HDD_hatd": [0.5], "y": [3.0]})
+    r = no.fit_predict(tr, te, ["HDD"], fe=False)
+    assert abs(r["coef"]["HDD"] - 2) < 1e-9
+    assert abs(r["pred_real"][0] - 3) < 1e-9 and abs(r["pred_hat"][0] - 2) < 1e-9 and abs(r["pred0"][0] - 4) < 1e-9
+    res = te.assign(pred_hat=r["pred_hat"], pred0=r["pred0"], pred_real=r["pred_real"])
+    summ, v = no.evaluate({"x": pd.concat([res, res.assign(year=2022)])})
+    assert abs(summ.iloc[0]["mse_reduction"] - 0.0) < 1e-12      # 오차 1 vs −1 → 제곱오차 같음

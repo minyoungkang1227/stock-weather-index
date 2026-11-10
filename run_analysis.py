@@ -141,7 +141,8 @@ def main(split_year: int = 2021) -> None:
     go = gas_opinc_test(p)
     fvr = forecast_value_test(w)
     sec = sector_volume_test(wq)
-    write_report(res, oos, p, split_year, s1, gv, go, fvr, sec)
+    oos_nc = nowcast_oos_test(w)
+    write_report(res, oos, p, split_year, s1, gv, go, fvr, sec, oos_nc)
     print("완료: output/results.csv, output/oos.csv, output/report.md")
 
 
@@ -256,8 +257,63 @@ def sector_volume_test(wq: pd.DataFrame) -> pd.DataFrame | None:
     return out
 
 
+def nowcast_oos_test(w: pd.DataFrame):
+    """추가 사전 등록(config.PREREG_NOWCAST_OOS): 분기 말 30일 전 짐작의 표본외 정확도 (날씨 vs 날씨 없음)."""
+    from swi import nowcast_oos as no, sector_volume as sv, volume
+    sp, g, sec = C.PREREG_NOWCAST_OOS, C.PREREG_GAS_VOLUME, C.PREREG_SECTOR_VOLUME
+    fc = load("forecast_mid", dtype={"issued_at": str})
+    if fc is None:
+        print("[표본외 나우캐스트] 건너뜀: forecast_mid 없음")
+        return None
+    wt = no.weather_table(w, fc, list(C.STATIONS), (1999, 2025), sp["days_before_end"], C.NATIONAL)
+    for v in ("HDD", "CDD"):
+        wt[v + "_d"] = (wt[v] - wt[v + "_ly"]) / 100
+        wt[v + "_hatd"] = (wt[v + "_hat"] - wt[v + "_ly"]) / 100
+    series = {}
+    if os.path.exists(g["file"]):
+        vg = volume.quarterly_volume_growth(volume.read_kogas_wide(g["file"])).rename(columns={"quarter": "q"})
+        vg = vg[~vg["year"].isin(g["exclude_years"]) & ~vg["region"].isin(g["exclude_regions"])]
+        m = pd.DataFrame([dict(region=r, stn=str(s)) for r, s in g["region_stn"].items() if r not in g["exclude_regions"]])
+        series["gas"] = (vg.merge(m, on="region").rename(columns={"region": "unit", "vol_g": "y"}), True)
+    f = sec["files"]
+    if os.path.exists(f["power_monthly"]):
+        pg = sv.quarterly_growth(sv.read_epsis_monthly(f["power_monthly"]))
+        series["power"] = (pg.rename(columns={"item": "unit", "vol_g": "y"}).assign(stn="NATIONAL"), False)
+    if os.path.exists(f["kosis"]):
+        k = sv.read_kosis_industry_index(f["kosis"])
+        for key, words in (("nonalc", ["비알코올"]), ("dairy", ["빙과", "낙농"])):
+            it = sv.match_item(k["item"].unique(), words)
+            if it:
+                kg = sv.quarterly_growth(k[k["item"] == it])
+                series[key] = (kg.rename(columns={"item": "unit", "vol_g": "y"}).assign(stn="NATIONAL"), False)
+    results, coefs = {}, {}
+    for key, (d, fe) in series.items():
+        cfg = sp["series"][key]
+        d = d.merge(wt, on=["stn", "year", "q"], how="left")
+        xs = cfg["x"]
+        d = d.rename(columns={f"{x}_d": x + "_x" for x in xs})
+        for x in xs:
+            d[x] = d[x + "_x"]
+        tr = d[d["year"].between(*cfg["train"])].dropna(subset=["y"] + xs)
+        te = d[d["year"].isin(cfg["test_years"])].dropna(subset=["y"] + xs + [x + "_hatd" for x in xs])
+        r = no.fit_predict(tr, te, xs, fe)
+        results[key] = te[["year", "q", "y"]].assign(pred_hat=r["pred_hat"], pred0=r["pred0"], pred_real=r["pred_real"])
+        coefs[key] = r["coef"]
+    summ, v = no.evaluate(results, sp["alpha"])
+    summ["coef_train"] = summ["series"].map(lambda k: ", ".join(f"{x} {b:+.4f}" for x, b in coefs[k].items()))
+    summ.to_csv(f"{C.OUTPUT}/prereg_nowcast_oos.csv", index=False, encoding="utf-8-sig")
+    pd.DataFrame([v]).to_csv(f"{C.OUTPUT}/prereg_nowcast_oos_verdict.csv", index=False, encoding="utf-8-sig")
+    pd.concat([r.assign(series=k) for k, r in results.items()]).to_csv(f"{C.OUTPUT}/nowcast_oos_points.csv", index=False,
+                                                                       encoding="utf-8-sig")
+    print("[표본외 나우캐스트] 분기 말 30일 전 짐작, 날씨 vs 날씨 없음")
+    print(summ.round(4).to_string(index=False))
+    print(f"  묶음 판정: 평균 개선 {v['mean_gain']:.3f}, {v['quarters_better']}/{v['n_quarters']}개 분기 개선, "
+          f"단측 p = {v['p_one']:.4f} → {'통과' if v['passed'] else '미통과'}")
+    return summ, v
+
+
 def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_year: int, s1=None, gv=None,
-                 go=None, fvr=None, sec=None) -> None:
+                 go=None, fvr=None, sec=None, oos_nc=None) -> None:
     lines = ["# 날씨지수 분석 결과", "",
              f"- 기간 {C.ANALYSIS_START_YEAR}~{C.ANALYSIS_END_YEAR}, 기업 {p['code'].nunique()}개",
              "- 모형: 기업 고정효과 + 분기더미 (+연도더미 버전), Driscoll-Kraay 표준오차",
@@ -273,6 +329,11 @@ def write_report(res: pd.DataFrame, oos: pd.DataFrame, p: pd.DataFrame, split_ye
                   f"- 계수 {gv['coef']:.4f} (100도일당), DK t {gv['t_DK']:.2f}(참고), 연도 순열 단측 p = {gv['p_perm']:.3f}, "
                   f"n = {gv['n']} ({gv['regions']}개 지역, {gv['years']}) → **{'통과' if gv['pass'] else '미통과'}** (기준 p < 0.05)",
                   "- 1차 4개 업종이 모두 미통과한 뒤 추가한 검정입니다. 판매량 자료를 보기 전에 기준을 고정했습니다.", ""]
+    if oos_nc is not None:
+        summ, v = oos_nc
+        lines += [f"## 추가 사전 등록 — 표본외 나우캐스트 ({C.PREREG_NOWCAST_OOS['date']})", "",
+                  f"분기 말 30일 전 짐작. 묶음 판정: {v['quarters_better']}/{v['n_quarters']}개 분기 개선, 단측 p = {v['p_one']:.4f} "
+                  f"→ **{'통과' if v['passed'] else '미통과'}**", "", summ.round(4).to_markdown(index=False), ""]
     if sec is not None:
         lines += [f"## 추가 사전 등록 — 업종 넓히기: 물량 ~ 날씨 ({C.PREREG_SECTOR_VOLUME['date']}, 8개 묶음 BH q ≤ 0.10)", "",
                   sec[["name", "item", "n", "coef", "p_one", "q_bh", "pass", "note"]].round(4).to_markdown(index=False), ""]
