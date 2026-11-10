@@ -26,14 +26,101 @@ def t(name: str) -> pd.DataFrame | None:
 
 
 st.title("Stock Weather Index")
-st.caption("날씨(관측·예보·평년) × 종목별 날씨 민감도 → 종목별 0~100 점수. 투자 권유가 아니며, 검증 탭의 결과와 함께 해석하세요.")
+st.caption("이번 분기 날씨 짐작(관측·기상청 예보·평년)과 그것이 업종 물량에 주는 영향을 봅니다. "
+           "확인된 것과 확인되지 않은 것은 '검증' 탭 맨 위 표에 있습니다. 투자 권유가 아닙니다.")
 
 if not os.path.exists(C.DB_PATH):
     st.error(f"DB가 없습니다({C.DB_PATH}). `python swi_system.py init` → `load`(이미 수집했을 때) 또는 `backfill` 순서로 실행하세요.")
     st.stop()
 
 daily, runs = t("swi_daily"), t("runs")
-tab1, tab2, tab3, tab4 = st.tabs(["오늘의 지수", "종목 상세", "검증", "시스템 상태"])
+tab0, tab1, tab2, tab3, tab4 = st.tabs(["이번 분기 날씨", "종목 지수 (참고)", "종목 상세", "검증", "시스템 상태"])
+
+REGION_OF = {108: "서울", 112: "인천", 119: "경기(수원)", 133: "대전", 143: "대구", 152: "울산", 156: "광주", 159: "부산"}
+
+
+def out_csv(name: str) -> pd.DataFrame | None:
+    f = os.path.join(C.OUTPUT, f"{name}.csv")
+    return pd.read_csv(f) if os.path.exists(f) else None
+
+
+def volume_coefs() -> dict:
+    """검정에서 나온 '100도일당 물량 변화' 계수 (통과한 것만). 없으면 빈 dict."""
+    out = {}
+    g = out_csv("prereg_gas_volume")
+    if g is not None and str(g.iloc[0]["pass"]).lower() == "true":
+        out["도시가스 판매량 (지역)"] = ("HDD", float(g.iloc[0]["coef"]))
+    sv = out_csv("prereg_sector_volume")
+    if sv is not None:
+        for _, r in sv.iterrows():
+            if str(r["pass"]).lower() != "true":
+                continue
+            v = "CDD" if "냉방" in r["name"] else "HDD"
+            label = {"전력": "전력 판매량 (전국)", "비알코올": "비알코올음료 출하 (전국)", "빙과": "낙농·빙과 출하 (전국)"}
+            key = next((lab for k, lab in label.items() if k in r["name"]), r["name"])
+            out[f"{key} · {'더위' if v == 'CDD' else '추위'}"] = (v, float(r["coef"]))
+    return out
+
+
+with tab0:
+    nc = t("nowcast_daily")
+    if nc is None or nc.empty:
+        st.info("아직 날씨 짐작이 없습니다. `python swi_system.py daily` 를 실행하세요.")
+    else:
+        asof = nc["asof"].max()
+        cur = nc[nc["asof"] == asof].copy()
+        qn = int(cur["quarter"].iloc[0])
+        main = "HDD" if qn in (1, 4) else ("CDD" if qn == 3 else "HDD")
+        word = {"HDD": "난방도일 (추위)", "CDD": "냉방도일 (더위)"}
+        a, b, c = st.columns(3)
+        a.metric("기준일", asof)
+        a.caption(f"{int(cur['year'].iloc[0])}년 {qn}분기")
+        r0 = cur.iloc[0]
+        b.metric("관측 비율", f"{100 * r0['obs_share']:.0f}%")
+        b.caption(f"관측 {int(r0['n_obs'])}일 · 예보 {int(r0['n_fc'])}일 · 평년 {int(r0['n_clim'])}일")
+        nat = cur[cur["stn"].astype(str) == "NATIONAL"]
+        if len(nat):
+            n0 = nat.iloc[0]
+            c.metric(f"전국 {word[main]}: 작년 대비", f"{n0[main + '_exp'] - n0[main + '_ly']:+.0f}도일",
+                     help="이번 분기 짐작(관측+예보+평년) − 작년 같은 분기 실제")
+        st.subheader(f"지역별 이번 분기 {word[main]} 짐작")
+        rows = []
+        for _, r in cur.iterrows():
+            stn = str(r["stn"])
+            name = "전국 (6개 도시 평균)" if stn == "NATIONAL" else REGION_OF.get(int(stn), stn)
+            rows.append({"지역": name, "짐작": r[main + "_exp"], "± (1표준편차)": r[main + "_sd"],
+                         "작년 같은 분기": r[main + "_ly"], "작년 대비": r[main + "_exp"] - r[main + "_ly"],
+                         "평년": r[main + "_norm"], "평년 대비": r[main + "_exp"] - r[main + "_norm"]})
+        st.dataframe(pd.DataFrame(rows).round(0), hide_index=True, width="stretch")
+        st.caption("짐작 = 어제까지 관측 + 기상청 중기예보(편향 보정) + 평년(직전 30년). "
+                   "예보를 쓰면 평년만 쓸 때보다 분기 난방도일 짐작 오차가 9.2% 줄어듭니다(2015~2026 검증, p = 0.0006).")
+
+        coefs = volume_coefs()
+        if coefs:
+            st.subheader("이 날씨가 업종 물량에 주는 몫 (참고)")
+            st.warning("참고치입니다. 날씨가 물량을 움직인다는 것은 확인됐지만, 2021~2025 표본외 검증에서 "
+                       "이 몫으로 물량을 미리 맞히는 정확도는 개선되지 않았습니다(가격·추세 충격이 더 큼). "
+                       "물량 예측치로 쓰지 마세요.")
+            vr = []
+            for label, (v, b_) in coefs.items():
+                if v != main and qn != 2:
+                    continue
+                if "지역" in label:
+                    for _, r in cur[cur["stn"].astype(str) != "NATIONAL"].iterrows():
+                        if int(r["stn"]) == 152:      # 울산은 판매량 검정에서 규칙으로 제외
+                            continue
+                        d = (r[v + "_exp"] - r[v + "_ly"]) / 100
+                        vr.append({"물량": f"도시가스 판매량 · {REGION_OF.get(int(r['stn']))}", "100도일당": b_,
+                                   "작년 대비 날씨 몫(%p)": 100 * b_ * d, "± 날씨 불확실성(%p)": 100 * b_ * r[v + "_sd"] / 100})
+                elif len(nat):
+                    d = (n0[v + "_exp"] - n0[v + "_ly"]) / 100
+                    vr.append({"물량": label, "100도일당": b_, "작년 대비 날씨 몫(%p)": 100 * b_ * d,
+                               "± 날씨 불확실성(%p)": 100 * b_ * n0[v + "_sd"] / 100})
+            if vr:
+                st.dataframe(pd.DataFrame(vr).round(3), hide_index=True, width="stretch")
+                st.caption("날씨 몫 = 검정에서 나온 계수 × (이번 분기 짐작 − 작년 같은 분기). 계수 자체의 추정오차는 포함하지 않았습니다.")
+            else:
+                st.caption("이번 분기에 해당하는 계절 지표의 검정 통과 물량이 없습니다.")
 
 with tab1:
     if daily is None or daily.empty:
@@ -91,11 +178,6 @@ with tab2:
             if len(src):
                 st.caption(f"민감도 추정에 쓴 결과변수: {src.iloc[-1]}")
 
-def out_csv(name: str) -> pd.DataFrame | None:
-    f = os.path.join(C.OUTPUT, f"{name}.csv")
-    return pd.read_csv(f) if os.path.exists(f) else None
-
-
 with tab3:
     st.subheader(f"사전 등록 판정 — 결과를 보기 전에 정한 기준 (등록 {C.PREREG_DATE})")
     st.caption("p값은 모두 연도 순열검정 999회. 이 절이 결론이고, 아래 표들은 참고 자료입니다. 자세한 근거: docs/결론_말할수있는것_없는것.md")
@@ -117,6 +199,11 @@ with tab3:
             rows.append(dict(검정=f"업종 물량: {r['name']}", 계수=r["coef"], p값=r["p_one"],
                              판정=("자료 없음" if str(r.get("note", "")) == "자료 없음" else
                                    "통과" if str(r["pass"]).lower() == "true" else "미통과")))
+    ov = out_csv("prereg_nowcast_oos_verdict")
+    if ov is not None:
+        r = ov.iloc[0]
+        rows.append(dict(검정=f"표본외: 날씨로 물량 미리 짐작 ({int(r['quarters_better'])}/{int(r['n_quarters'])}개 분기 개선)",
+                         계수=r["mean_gain"], p값=r["p_one"], 판정="통과" if str(r["passed"]).lower() == "true" else "미통과"))
     fvx = out_csv("prereg_forecast_value")
     if fvx is not None:
         r = fvx.iloc[0]
@@ -126,7 +213,7 @@ with tab3:
     if s2 is not None:
         rows.append(dict(검정="2차: SWI 업종 내 롱숏 (주가)", 계수=float("nan"), p값=float("nan"), 판정=str(s2.iloc[0]["verdict"])))
     if rows:
-        st.dataframe(pd.DataFrame(rows).round(4), hide_index=True, width="stretch")
+        st.dataframe(pd.DataFrame(rows).round(4), hide_index=True, width="stretch", height=36 * (len(rows) + 1) + 4)
     else:
         st.info("`python run_analysis.py` 를 실행하면 판정이 표시됩니다.")
     prof = out_csv("forecast_value_by_days_left")
