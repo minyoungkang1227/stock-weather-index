@@ -21,3 +21,5 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+# 미팅·공유용 PDF는 저장소에 올리지 않음
+docs/*.pdf
